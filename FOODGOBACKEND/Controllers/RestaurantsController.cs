@@ -122,7 +122,7 @@ namespace FOODGOBACKEND.Controllers
                         .SelectMany(o => o.OrderItems)
                         .Count(oi => oi.Review != null),
                     
-                    TotalOrders = r.Orders.Count(o => o.OrderStatus == "Completed"),
+                    TotalOrders = r.Orders.Count(o => o.OrderStatus == "COMPLETED"),
                     
                     // Get available dishes (menu)
                     Dishes = r.Dishes
