@@ -2,7 +2,7 @@ using System.ComponentModel.DataAnnotations;
 
 namespace FOODGOBACKEND.Dtos.Auth
 {
-    public class RegisterUserDto
+    public class RegisterCustomerDto
     {
         [Required(ErrorMessage = "Phone number is required.")]
         [Phone(ErrorMessage = "Invalid phone number format.")]
@@ -26,13 +26,5 @@ namespace FOODGOBACKEND.Dtos.Auth
         [EmailAddress(ErrorMessage = "Invalid email address format.")]
         [StringLength(100)]
         public string? Email { get; set; }
-
-        [Required(ErrorMessage = "User type is required.")]
-        [StringLength(20)]
-        public string UserType { get; set; } = null!; // e.g., "Customer", "Shipper", "Restaurant"
-
-        // Optional fields for specific user types
-        [StringLength(500)]
-        public string? RestaurantAddress { get; set; } // For Restaurant registration
     }
 }

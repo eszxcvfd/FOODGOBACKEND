@@ -1,13 +1,11 @@
-using FOODGOBACKEND.Dtos.Auth;
+﻿using FOODGOBACKEND.Dtos.Auth;
 using FOODGOBACKEND.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using Org.BouncyCastle.Crypto.Generators;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
-using BCrypt;
 
 namespace FOODGOBACKEND.Controllers
 {
@@ -24,29 +22,27 @@ namespace FOODGOBACKEND.Controllers
             _configuration = configuration;
         }
 
-        [HttpPost("register")]
-        public async Task<IActionResult> Register([FromBody] RegisterUserDto registerUserDto)
+        // CUSTOMER REGISTRATION
+        [HttpPost("register/customer")]
+        public async Task<IActionResult> RegisterCustomer([FromBody] RegisterCustomerDto dto)
         {
             if (!ModelState.IsValid)
             {
                 return BadRequest(ModelState);
             }
 
-            // Check if phone number already exists
-            if (await _context.Users.AnyAsync(u => u.PhoneNumber == registerUserDto.PhoneNumber))
+            if (await _context.Users.AnyAsync(u => u.PhoneNumber == dto.PhoneNumber))
             {
                 return BadRequest("Phone number is already registered.");
             }
 
-            // Hash the password
-            var passwordHash = BCrypt.Net.BCrypt.HashPassword(registerUserDto.Password);
-
+            var passwordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password);
             var user = new User
             {
-                PhoneNumber = registerUserDto.PhoneNumber,
+                PhoneNumber = dto.PhoneNumber,
                 PasswordHash = passwordHash,
-                UserType = registerUserDto.UserType,
-                IsActive = true, // Default to active
+                UserType = "CUSTOMER",
+                IsActive = true,
                 CreatedAt = DateTime.UtcNow
             };
 
@@ -54,56 +50,135 @@ namespace FOODGOBACKEND.Controllers
             try
             {
                 await _context.Users.AddAsync(user);
-                await _context.SaveChangesAsync(); // Save to get the UserId
+                await _context.SaveChangesAsync();
 
-                // Create role-specific entity
-                switch (user.UserType.ToLower())
+                var customer = new Customer
                 {
-                    case "customer":
-                        var customer = new Customer
-                        {
-                            CustomerId = user.UserId,
-                            FullName = registerUserDto.FullName,
-                            Email = registerUserDto.Email
-                        };
-                        await _context.Customers.AddAsync(customer);
-                        break;
-                    case "shipper":
-                        var shipper = new Shipper
-                        {
-                            ShipperId = user.UserId,
-                            FullName = registerUserDto.FullName,
-                            IsAvailable = true // Default to available
-                        };
-                        await _context.Shippers.AddAsync(shipper);
-                        break;
-                    case "restaurant":
-                        var restaurant = new Restaurant
-                        {
-                            OwnerId = user.UserId,
-                            RestaurantName = registerUserDto.FullName, // Assuming FullName is used as RestaurantName for registration
-                            PhoneNumber = user.PhoneNumber,
-                            IsActive = true // Default to active
-                        };
-                        await _context.Restaurants.AddAsync(restaurant);
-                        break;
-                    default:
-                        return BadRequest("Invalid user type specified.");
-                }
-
+                    CustomerId = user.UserId,
+                    FullName = dto.FullName,
+                    Email = dto.Email
+                };
+                await _context.Customers.AddAsync(customer);
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
 
-                return Ok(new { Message = "User registered successfully." });
+                return Ok(new { Message = "Customer registered successfully." });
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 await transaction.RollbackAsync();
-                // Log the exception
-                return StatusCode(500, "An error occurred during registration.");
+                // Log the exception for debugging
+                Console.WriteLine($"Registration error: {ex.Message}");
+                return StatusCode(500, $"An error occurred during registration: {ex.Message}");
             }
         }
 
+        // SHIPPER REGISTRATION
+        [HttpPost("register/shipper")]
+        public async Task<IActionResult> RegisterShipper([FromBody] RegisterShipperDto dto)
+        {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
+            if (await _context.Users.AnyAsync(u => u.PhoneNumber == dto.PhoneNumber))
+            {
+                return BadRequest("Phone number is already registered.");
+            }
+
+            var passwordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password);
+            var user = new User
+            {
+                PhoneNumber = dto.PhoneNumber,
+                PasswordHash = passwordHash,
+                UserType = "SHIPPER",
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            using var transaction = await _context.Database.BeginTransactionAsync();
+            try
+            {
+                await _context.Users.AddAsync(user);
+                await _context.SaveChangesAsync();
+
+                var shipper = new Shipper
+                {
+                    ShipperId = user.UserId,
+                    FullName = dto.FullName,
+                    LicensePlate = dto.LicensePlate,
+                    IsAvailable = true
+                };
+                await _context.Shippers.AddAsync(shipper);
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+
+                return Ok(new { Message = "Shipper registered successfully." });
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                // Log the exception for debugging
+                Console.WriteLine($"Registration error: {ex.Message}");
+                return StatusCode(500, $"An error occurred during registration: {ex.Message}");
+            }
+        }
+
+        // RESTAURANT REGISTRATION
+        [HttpPost("register/restaurant")]
+        public async Task<IActionResult> RegisterRestaurant([FromBody] RegisterRestaurantDto dto)
+        {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
+            if (await _context.Users.AnyAsync(u => u.PhoneNumber == dto.PhoneNumber))
+            {
+                return BadRequest("Phone number is already registered.");
+            }
+
+            var passwordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password);
+            var user = new User
+            {
+                PhoneNumber = dto.PhoneNumber,
+                PasswordHash = passwordHash,
+                UserType = "RESTAURANT",
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            using var transaction = await _context.Database.BeginTransactionAsync();
+            try
+            {
+                await _context.Users.AddAsync(user);
+                await _context.SaveChangesAsync();
+
+                var restaurant = new Restaurant
+                {
+                    OwnerId = user.UserId,
+                    RestaurantName = dto.RestaurantName,
+                    PhoneNumber = dto.PhoneNumber,
+                    Address = dto.Address,
+                    IsActive = true
+                };
+                await _context.Restaurants.AddAsync(restaurant);
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+
+                return Ok(new { Message = "Restaurant registered successfully." });
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                // Log the exception for debugging
+                Console.WriteLine($"Registration error: {ex.Message}");
+                return StatusCode(500, $"An error occurred during registration: {ex.Message}");
+            }
+        }
+
+        // COMMON LOGIN FOR ALL USER TYPES
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginDto loginDto)
         {
@@ -126,7 +201,7 @@ namespace FOODGOBACKEND.Controllers
 
             var token = GenerateJwtToken(user);
 
-            return Ok(new { Token = token });
+            return Ok(new { Token = token, UserType = user.UserType });
         }
 
         private string GenerateJwtToken(User user)

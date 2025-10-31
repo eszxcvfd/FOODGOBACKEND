@@ -2,7 +2,7 @@ using System.ComponentModel.DataAnnotations;
 
 namespace FOODGOBACKEND.Dtos.Auth
 {
-    public class RegisterUserDto
+    public class RegisterRestaurantDto
     {
         [Required(ErrorMessage = "Phone number is required.")]
         [Phone(ErrorMessage = "Invalid phone number format.")]
@@ -19,20 +19,12 @@ namespace FOODGOBACKEND.Dtos.Auth
         [Compare("Password", ErrorMessage = "The password and confirmation password do not match.")]
         public string ConfirmPassword { get; set; } = null!;
 
-        [Required(ErrorMessage = "Full name is required.")]
-        [StringLength(100)]
-        public string FullName { get; set; } = null!;
+        [Required(ErrorMessage = "Restaurant name is required.")]
+        [StringLength(150)]
+        public string RestaurantName { get; set; } = null!;
 
-        [EmailAddress(ErrorMessage = "Invalid email address format.")]
-        [StringLength(100)]
-        public string? Email { get; set; }
-
-        [Required(ErrorMessage = "User type is required.")]
-        [StringLength(20)]
-        public string UserType { get; set; } = null!; // e.g., "Customer", "Shipper", "Restaurant"
-
-        // Optional fields for specific user types
+        [Required(ErrorMessage = "Address is required.")]
         [StringLength(500)]
-        public string? RestaurantAddress { get; set; } // For Restaurant registration
+        public string Address { get; set; } = null!;
     }
 }

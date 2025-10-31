@@ -1,0 +1,64 @@
+﻿@FOODGOBACKEND_HostAddress = http://localhost:5179
+
+### Register Customer
+POST {{FOODGOBACKEND_HostAddress}}/api/auth/register/customer
+Content-Type: application/json
+
+{
+  "phoneNumber": "0123456001",
+  "password": "Customer123!",
+  "confirmPassword": "Customer123!",
+  "fullName": "Nguyen Van A",
+  "email": "customer@example.com"
+}
+
+### Register Shipper
+POST {{FOODGOBACKEND_HostAddress}}/api/auth/register/shipper
+Content-Type: application/json
+
+{
+  "phoneNumber": "0123456002",
+  "password": "Shipper123!",
+  "confirmPassword": "Shipper123!",
+  "fullName": "Tran Van B",
+  "licensePlate": "59A-12345"
+}
+
+### Register Restaurant
+POST {{FOODGOBACKEND_HostAddress}}/api/auth/register/restaurant
+Content-Type: application/json
+
+{
+  "phoneNumber": "0123456003",
+  "password": "Restaurant123!",
+  "confirmPassword": "Restaurant123!",
+  "restaurantName": "Phở Hà Nội",
+  "address": "123 Nguyen Hue, District 1, HCM City"
+}
+
+### Login (Common for all)
+POST {{FOODGOBACKEND_HostAddress}}/api/auth/login
+Content-Type: application/json
+
+{
+  "phoneNumber": "0123456003",
+  "password": "Restaurant123!"
+}
+
+###
+@token = YOUR_TOKEN_HERE
+
+### Test Dishes API with Restaurant token
+POST {{FOODGOBACKEND_HostAddress}}/api/dishes
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "dishName": "Phở Bò",
+  "description": "Phở bò truyền thống Hà Nội",
+  "price": 50000,
+  "isAvailable": true
+}
+````````
+
+# Response

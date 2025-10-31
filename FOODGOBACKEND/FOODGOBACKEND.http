@@ -1,5 +1,87 @@
 @FOODGOBACKEND_HostAddress = http://localhost:5179
 
+### Step 1: Login as Admin to get JWT token
+POST {{FOODGOBACKEND_HostAddress}}/api/auth/login
+Content-Type: application/json
+
+{
+  "phoneNumber": "0999999999",
+  "password": "123456789@Tr"
+}
+
+###
+# IMPORTANT: After running login above, copy the token from response and paste it below
+@token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIzIiwianRpIjoiZmFlYmM5NTEtM2ExZC00MGJhLTk0MjYtMjU1ZjU4YzA4MWMxIiwiaHR0cDovL3NjaGVtYXMueG1sc29hcC5vcmcvd3MvMjAwNS8wNS9pZGVudGl0eS9jbGFpbXMvbmFtZWlkZW50aWZpZXIiOiIzIiwiaHR0cDovL3NjaGVtYXMubWljcm9zb2Z0LmNvbS93cy8yMDA4LzA2L2lkZW50aXR5L2NsYWltcy9yb2xlIjoiQURNSU4iLCJwaG9uZU51bWJlciI6IjA5OTk5OTk5OTkiLCJleHAiOjE3NjI0ODY3NDEsImlzcyI6Imh0dHBzOi8vZm9vZGdvLmNvbSIsImF1ZCI6Imh0dHBzOi8vZm9vZGdvLmNvbSJ9.UdIH0l8uVK65O1lmusrSe6pOZhK9PEIWeoJ5s0LDZgw"
+
+### Step 2: Get All Users (Admin only) - Requires token from Step 1
+GET {{FOODGOBACKEND_HostAddress}}/api/Admin/users?pageNumber=1&pageSize=10
+Authorization: Bearer {{token}}
+
+### Step 3: Get User By ID (Admin only) - Requires token
+GET {{FOODGOBACKEND_HostAddress}}/api/Admin/users/1
+Authorization: Bearer {{token}}
+
+### Step 4: Update User Status (Admin only) - Lock/Unlock account
+PATCH {{FOODGOBACKEND_HostAddress}}/api/Admin/users/2/status
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "isActive": false
+}
+
+###
+### ============================================
+### OTHER ENDPOINTS FOR TESTING
+### ============================================
+
+### Register a new Customer
+POST {{FOODGOBACKEND_HostAddress}}/api/auth/register
+Content-Type: application/json
+
+{
+  "phoneNumber": "0987654321",
+  "password": "Password123!",
+  "confirmPassword": "Password123!",
+  "fullName": "John Doe",
+  "email": "john.doe@example.com",
+  "userType": "Customer"
+}
+
+### Login as Customer
+POST {{FOODGOBACKEND_HostAddress}}/api/auth/login
+Content-Type: application/json
+
+{
+  "phoneNumber": "0987654321",
+  "password": "Password123!"
+}
+
+### Register a new Shipper
+POST {{FOODGOBACKEND_HostAddress}}/api/auth/register
+Content-Type: application/json
+
+{
+  "phoneNumber": "0123456789",
+  "password": "ShipperPass123!",
+  "confirmPassword": "ShipperPass123!",
+  "fullName": "Jane Smith",
+  "userType": "Shipper"
+}
+
+### Register a new Restaurant
+POST {{FOODGOBACKEND_HostAddress}}/api/auth/register
+Content-Type: application/json
+
+{
+  "phoneNumber": "0111222333",
+  "password": "Restaurant123!",
+  "confirmPassword": "Restaurant123!",
+  "fullName": "Pizza Palace",
+  "userType": "Restaurant"
+}
+
+### Get Weather (Test endpoint)
 GET {{FOODGOBACKEND_HostAddress}}/weatherforecast/
 Accept: application/json
 
