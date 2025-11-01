@@ -41,6 +41,8 @@ public partial class FoodGoContext : DbContext
 
     public virtual DbSet<User> Users { get; set; }
 
+    public virtual DbSet<UserDevice> UserDevices { get; set; }
+
     public virtual DbSet<Voucher> Vouchers { get; set; }
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder) { }
@@ -287,6 +289,29 @@ public partial class FoodGoContext : DbContext
             entity.Property(e => e.PasswordHash).HasMaxLength(256);
             entity.Property(e => e.PhoneNumber).HasMaxLength(15);
             entity.Property(e => e.UserType).HasMaxLength(20);
+        });
+
+        modelBuilder.Entity<UserDevice>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("PK__UserDevi__3214EC073F4EA74D");
+
+            entity.HasIndex(e => e.UserId, "IX_UserDevices_UserId");
+
+            entity.HasIndex(e => e.DeviceToken, "UX_UserDevices_DeviceToken").IsUnique();
+
+            entity.HasIndex(e => new { e.UserId, e.DeviceId }, "UX_UserDevices_User_Device").IsUnique();
+
+            entity.Property(e => e.AppVersion).HasMaxLength(50);
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getdate())");
+            entity.Property(e => e.DeviceModel).HasMaxLength(100);
+            entity.Property(e => e.DeviceToken).HasMaxLength(512);
+            entity.Property(e => e.DeviceType).HasMaxLength(50);
+            entity.Property(e => e.IsActive).HasDefaultValue(true);
+            entity.Property(e => e.LastLogin).HasDefaultValueSql("(getdate())");
+
+            entity.HasOne(d => d.User).WithMany(p => p.UserDevices)
+                .HasForeignKey(d => d.UserId)
+                .HasConstraintName("FK_UserDevices_Users");
         });
 
         modelBuilder.Entity<Voucher>(entity =>

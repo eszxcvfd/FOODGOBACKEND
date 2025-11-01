@@ -1,8 +1,10 @@
 using FOODGOBACKEND.Dtos.Order;
 using FOODGOBACKEND.Models;
+using FOODGOBACKEND.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using System.Security.Claims;
 
 namespace FOODGOBACKEND.Controllers
@@ -13,10 +15,17 @@ namespace FOODGOBACKEND.Controllers
     public class RestaurantOrdersController : ControllerBase
     {
         private readonly FoodGoContext _context;
+        private readonly IOrderTrackingService _orderTrackingService;
+        private readonly ILogger<RestaurantOrdersController> _logger;
 
-        public RestaurantOrdersController(FoodGoContext context)
+        public RestaurantOrdersController(
+            FoodGoContext context,
+            IOrderTrackingService orderTrackingService,
+            ILogger<RestaurantOrdersController> logger)
         {
             _context = context;
+            _orderTrackingService = orderTrackingService;
+            _logger = logger;
         }
 
         /// <summary>
@@ -254,6 +263,21 @@ namespace FOODGOBACKEND.Controllers
 
             await _context.SaveChangesAsync();
 
+            // Send real-time notification to customer
+            try
+            {
+                var orderStatus = await GetOrderStatusForNotification(id);
+                if (orderStatus != null)
+                {
+                    await _orderTrackingService.NotifyOrderStatusChanged(id, normalizedStatus, orderStatus);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Failed to send SignalR notification for order {id}");
+                // Don't fail the request if notification fails
+            }
+
             return NoContent();
         }
 
@@ -299,6 +323,162 @@ namespace FOODGOBACKEND.Controllers
             }
 
             return (true, null);
+        }
+
+        /// <summary>
+        /// Gets status of multiple orders for customer.
+        /// Useful for tracking multiple active orders at once.
+        /// </summary>
+        /// <param name="orderIds">Comma-separated order IDs</param>
+        [HttpGet("customer/batch")]
+        [Authorize(Roles = "CUSTOMER")]
+        public async Task<ActionResult<List<OrderStatusDto>>> GetMultipleOrderStatusForCustomer([FromQuery] string? orderIds)
+        {
+            // Get customer ID from JWT token
+            var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!int.TryParse(userIdClaim, out var customerId))
+            {
+                return Unauthorized("Invalid user token.");
+            }
+
+            // Check if orderIds is provided
+            if (string.IsNullOrWhiteSpace(orderIds))
+            {
+                return BadRequest(new 
+                { 
+                    Message = "No order IDs provided.",
+                    Example = "Usage: /api/OrderStatus/customer/batch?orderIds=1,2,3"
+                });
+            }
+
+            // Parse order IDs
+            var ids = orderIds.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(id => int.TryParse(id.Trim(), out var parsed) ? parsed : (int?)null)
+                .Where(id => id.HasValue)
+                .Select(id => id!.Value)
+                .Distinct()
+                .ToList();
+
+            if (!ids.Any())
+            {
+                return BadRequest(new 
+                { 
+                    Message = "No valid order IDs found.",
+                    Example = "Valid format: orderIds=1,2,3"
+                });
+            }
+
+            var orderStatuses = await _context.Orders
+                .Include(o => o.Restaurant)
+                .Include(o => o.Shipper)
+                    .ThenInclude(s => s!.ShipperNavigation)
+                .Where(o => ids.Contains(o.OrderId) && o.CustomerId == customerId)
+                .Select(o => new OrderStatusDto
+                {
+                    OrderId = o.OrderId,
+                    OrderCode = o.OrderCode,
+                    OrderStatus = o.OrderStatus,
+                    DeliveryAddress = o.DeliveryAddress,
+                    TotalAmount = o.TotalAmount,
+                    EstimatedDeliveryTime = o.DeliveringAt != null 
+                        ? o.DeliveringAt.Value.AddMinutes(30)
+                        : o.PreparedAt != null
+                            ? o.PreparedAt.Value.AddMinutes(45)
+                            : o.ConfirmedAt != null
+                                ? o.ConfirmedAt.Value.AddMinutes(60)
+                                : o.CreatedAt != null
+                                    ? o.CreatedAt.Value.AddMinutes(75)
+                                    : null,
+
+                    Timeline = new OrderStatusTimeline
+                    {
+                        OrderPlaced = o.CreatedAt,
+                        Confirmed = o.ConfirmedAt,
+                        Prepared = o.PreparedAt,
+                        OutForDelivery = o.DeliveringAt,
+                        Delivered = o.CompletedAt,
+                        Cancelled = o.CancelledAt
+                    },
+
+                    Restaurant = new OrderStatusRestaurantInfo
+                    {
+                        RestaurantId = o.Restaurant.RestaurantId,
+                        RestaurantName = o.Restaurant.RestaurantName,
+                        PhoneNumber = o.Restaurant.PhoneNumber
+                    },
+
+                    Shipper = o.Shipper != null ? new OrderStatusShipperInfo
+                    {
+                        ShipperId = o.Shipper.ShipperId,
+                        FullName = o.Shipper.FullName,
+                        PhoneNumber = o.Shipper.ShipperNavigation.PhoneNumber,
+                        LicensePlate = o.Shipper.LicensePlate,
+                        CurrentLat = o.Shipper.CurrentLat,
+                        CurrentLng = o.Shipper.CurrentLng
+                    } : null
+                })
+                .ToListAsync();
+
+            if (!orderStatuses.Any())
+            {
+                return NotFound(new 
+                { 
+                    Message = "No orders found for the provided IDs.",
+                    RequestedIds = ids,
+                    Note = "Orders may not exist or do not belong to you."
+                });
+            }
+
+            return Ok(new
+            {
+                RequestedCount = ids.Count,
+                FoundCount = orderStatuses.Count,
+                Data = orderStatuses
+            });
+        }
+
+        // Helper method
+        private async Task<OrderStatusDto?> GetOrderStatusForNotification(int orderId)
+        {
+            return await _context.Orders
+                .Include(o => o.Restaurant)
+                .Include(o => o.Shipper)
+                    .ThenInclude(s => s!.ShipperNavigation)
+                .Where(o => o.OrderId == orderId)
+                .Select(o => new OrderStatusDto
+                {
+                    OrderId = o.OrderId,
+                    OrderCode = o.OrderCode,
+                    OrderStatus = o.OrderStatus,
+                    DeliveryAddress = o.DeliveryAddress,
+                    TotalAmount = o.TotalAmount,
+                    EstimatedDeliveryTime = o.DeliveringAt != null ? o.DeliveringAt.Value.AddMinutes(30) : null,
+                    Timeline = new OrderStatusTimeline
+                    {
+                        OrderPlaced = o.CreatedAt,
+                        Confirmed = o.ConfirmedAt,
+                        Prepared = o.PreparedAt,
+                        OutForDelivery = o.DeliveringAt,
+                        Delivered = o.CompletedAt,
+                        Cancelled = o.CancelledAt
+                    },
+                    Restaurant = new OrderStatusRestaurantInfo
+                    {
+                        RestaurantId = o.Restaurant.RestaurantId,
+                        RestaurantName = o.Restaurant.RestaurantName,
+                        PhoneNumber = o.Restaurant.PhoneNumber
+                    },
+                    Shipper = o.Shipper != null ? new OrderStatusShipperInfo
+                    {
+                        ShipperId = o.Shipper.ShipperId,
+                        FullName = o.Shipper.FullName,
+                        PhoneNumber = o.Shipper.ShipperNavigation.PhoneNumber,
+                        LicensePlate = o.Shipper.LicensePlate,
+                        CurrentLat = o.Shipper.CurrentLat,
+                        CurrentLng = o.Shipper.CurrentLng
+                    } : null
+                })
+                .FirstOrDefaultAsync();
         }
     }
 }

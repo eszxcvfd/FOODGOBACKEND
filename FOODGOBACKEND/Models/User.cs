@@ -28,4 +28,6 @@ public partial class User
     public virtual Restaurant? Restaurant { get; set; }
 
     public virtual Shipper? Shipper { get; set; }
+
+    public virtual ICollection<UserDevice> UserDevices { get; set; } = new List<UserDevice>();
 }
