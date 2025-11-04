@@ -3,6 +3,7 @@ using FOODGOBACKEND.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 
 namespace FOODGOBACKEND.Controllers
 {
@@ -16,6 +17,38 @@ namespace FOODGOBACKEND.Controllers
         public CustomerController(FoodGoContext context)
         {
             _context = context;
+        }
+
+        /// <summary>
+        /// Gets the list of all addresses for the authenticated customer.
+        /// Customer Use Case C-UC04: Manage addresses.
+        /// </summary>
+        [HttpGet("addresses")]
+        public async Task<ActionResult<IEnumerable<ItemAddressDto>>> GetMyAddresses()
+        {
+            var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!int.TryParse(userIdClaim, out var customerId))
+            {
+                return Unauthorized("Invalid customer token.");
+            }
+
+            var addresses = await _context.Addresses
+                .Where(a => a.CustomerId == customerId)
+                .Include(a => a.Customer)
+                    .ThenInclude(c => c.CustomerNavigation)
+                .OrderByDescending(a => a.IsDefault) // Show default address first
+                .ThenByDescending(a => a.AddressId)
+                .Select(a => new ItemAddressDto
+                {
+                    AddressId = a.AddressId,
+                    CustomerName = a.Customer.FullName,
+                    CustomerPhone = a.Customer.CustomerNavigation.PhoneNumber,
+                    FullAddress = a.FullAddress,
+                    IsDefault = a.IsDefault
+                })
+                .ToListAsync();
+
+            return Ok(addresses);
         }
 
         /// <summary>
