@@ -1,9 +1,9 @@
-namespace FOODGOBACKEND.Dtos.Dish
+namespace FOODGOBACKEND.Dtos.Customer
 {
     /// <summary>
-    /// Represents the data of a dish returned to the client.
+    /// Represents a food item displayed to a customer.
     /// </summary>
-    public class DishDto
+    public class ItemFoodDto
     {
         /// <summary>
         /// The unique identifier for the dish.
@@ -11,24 +11,9 @@ namespace FOODGOBACKEND.Dtos.Dish
         public int DishId { get; set; }
 
         /// <summary>
-        /// The ID of the restaurant this dish belongs to.
-        /// </summary>
-        public int RestaurantId { get; set; }
-
-        /// <summary>
         /// The name of the dish.
         /// </summary>
         public string DishName { get; set; } = null!;
-
-        /// <summary>
-        /// A description of the dish.
-        /// </summary>
-        public string? Description { get; set; }
-
-        /// <summary>
-        /// The price of the dish.
-        /// </summary>
-        public decimal Price { get; set; }
 
         /// <summary>
         /// The URL for the dish's image.
@@ -36,8 +21,23 @@ namespace FOODGOBACKEND.Dtos.Dish
         public string? ImageUrl { get; set; }
 
         /// <summary>
-        /// Indicates whether the dish is currently available.
+        /// The price of the dish.
         /// </summary>
-        public bool IsAvailable { get; set; }
+        public decimal Price { get; set; }
+
+        /// <summary>
+        /// The average rating for the dish.
+        /// </summary>
+        public double AverageRating { get; set; }
+
+        /// <summary>
+        /// The total number of ratings the dish has received.
+        /// </summary>
+        public int RatingCount { get; set; }
+
+        /// <summary>
+        /// The total number of times this dish has been sold.
+        /// </summary>
+        public int TotalSold { get; set; }
     }
 }
