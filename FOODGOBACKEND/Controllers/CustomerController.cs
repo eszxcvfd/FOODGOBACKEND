@@ -20,7 +20,72 @@ namespace FOODGOBACKEND.Controllers
         }
 
         /// <summary>
-        /// Gets the list of all addresses for the authenticated customer.
+        /// Gets the order history for the authenticated customer.
+        /// Customer Use Case C-UC06: View order history.
+        /// </summary>
+        [HttpGet("orders/history")]
+        public async Task<ActionResult<object>> GetOrderHistory(
+            [FromQuery] int pageNumber = 1,
+            [FromQuery] int pageSize = 10,
+            [FromQuery] string? status = null)
+        {
+            var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!int.TryParse(userIdClaim, out var customerId))
+            {
+                return Unauthorized("Invalid customer token.");
+            }
+
+            // Step 2: Create a database query for orders.
+            var query = _context.Orders
+                // Step 3: IMPORTANT - Filter the orders to match ONLY the logged-in customer's ID.
+                .Where(o => o.CustomerId == customerId)
+                .Include(o => o.Restaurant)
+                .Include(o => o.OrderItems)
+                    .ThenInclude(oi => oi.Dish)
+                .AsQueryable();
+
+            // Apply status filter if provided
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                var normalizedStatus = status.ToUpper();
+                query = query.Where(o => o.OrderStatus == normalizedStatus);
+            }
+
+            var totalRecords = await query.CountAsync();
+            var totalPages = (int)Math.Ceiling(totalRecords / (double)pageSize);
+
+            var orders = await query
+                .OrderByDescending(o => o.CreatedAt)
+                .Skip((pageNumber - 1) * pageSize)
+                .Take(pageSize)
+                .Select(o => new ItemOrderHistoryDto
+                {
+                    OrderId = o.OrderId,
+                    RestaurantName = o.Restaurant.RestaurantName,
+                    OrderStatus = o.OrderStatus,
+                    OrderDate = o.CreatedAt ?? DateTime.MinValue,
+                    TotalPrice = o.TotalAmount,
+                    // Generate a summary of the first few items
+                    OrderSummary = string.Join(", ", o.OrderItems
+                        .Take(2) // Take first 2 items for a brief summary
+                        .Select(oi => $"{oi.Quantity}x {oi.Dish.DishName}"))
+                        + (o.OrderItems.Count > 2 ? "..." : "")
+                })
+                .ToListAsync();
+
+            return Ok(new
+            {
+                PageNumber = pageNumber,
+                PageSize = pageSize,
+                TotalPages = totalPages,
+                TotalRecords = totalRecords,
+                Data = orders
+            });
+        }
+
+
+        /// <summary>
+        /// Gets the list of addresses for the authenticated customer.
         /// Customer Use Case C-UC04: Manage addresses.
         /// </summary>
         [HttpGet("addresses")]
@@ -134,6 +199,9 @@ namespace FOODGOBACKEND.Controllers
             var totalRecords = await query.CountAsync();
             var totalPages = (int)Math.Ceiling(totalRecords / (double)pageSize);
 
+            // Lấy base URL của server
+            var baseUrl = $"{Request.Scheme}://{Request.Host}";
+
             var dishes = await query
                 .OrderByDescending(d => d.DishId)
                 .Skip((pageNumber - 1) * pageSize)
@@ -142,7 +210,10 @@ namespace FOODGOBACKEND.Controllers
                 {
                     DishId = d.DishId,
                     DishName = d.DishName,
-                    ImageUrl = d.ImageUrl,
+                    // Tạo URL đầy đủ cho ảnh
+                    ImageUrl = !string.IsNullOrEmpty(d.ImageUrl) 
+                        ? (d.ImageUrl.StartsWith("http") ? d.ImageUrl : $"{baseUrl}/images/dishes/{d.ImageUrl}")
+                        : null,
                     Price = d.Price,
                     AverageRating = d.OrderItems
                         .Where(oi => oi.Review != null)

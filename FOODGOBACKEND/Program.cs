@@ -49,6 +49,9 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
+// IMPORTANT: Add this BEFORE UseRouting
+app.UseStaticFiles(); // Enable serving static files from wwwroot
+
 // Add Authentication middleware
 app.UseAuthentication();
 app.UseAuthorization();
