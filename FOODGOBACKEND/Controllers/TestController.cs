@@ -1,4 +1,5 @@
 ﻿using FOODGOBACKEND.Dtos.Test;
+using FOODGOBACKEND.Helpers;
 using FOODGOBACKEND.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -22,6 +23,135 @@ namespace FOODGOBACKEND.Controllers
         {
             _context = context;
             _environment = environment;
+        }
+
+        /// <summary>
+        /// Tests address to coordinates conversion (Geocoding).
+        /// POST: api/Test/geocode
+        /// </summary>
+        /// <param name="dto">Address to geocode.</param>
+        /// <returns>Latitude and Longitude coordinates.</returns>
+        [HttpPost("geocode")]
+        public async Task<ActionResult<object>> TestGeocode([FromBody] GeocodeRequestDto dto)
+        {
+            if (string.IsNullOrWhiteSpace(dto.Address))
+            {
+                return BadRequest("Address is required.");
+            }
+
+            var coordinates = await GeoLocationHelper.GetCoordinatesFromAddress(dto.Address);
+
+            if (coordinates == null)
+            {
+                return NotFound(new
+                {
+                    Success = false,
+                    Message = "Could not find coordinates for the given address.",
+                    Address = dto.Address
+                });
+            }
+
+            return Ok(new
+            {
+                Success = true,
+                Address = dto.Address,
+                Latitude = coordinates.Value.Latitude,
+                Longitude = coordinates.Value.Longitude,
+                GoogleMapsUrl = $"https://www.google.com/maps?q={coordinates.Value.Latitude},{coordinates.Value.Longitude}"
+            });
+        }
+
+        /// <summary>
+        /// Tests batch address to coordinates conversion.
+        /// POST: api/Test/geocode/batch
+        /// </summary>
+        /// <param name="addresses">List of addresses to geocode.</param>
+        /// <returns>List of addresses with their coordinates.</returns>
+        [HttpPost("geocode/batch")]
+        public async Task<ActionResult<object>> TestGeocodeBatch([FromBody] List<string> addresses)
+        {
+            if (addresses == null || !addresses.Any())
+            {
+                return BadRequest("At least one address is required.");
+            }
+
+            if (addresses.Count > 5)
+            {
+                return BadRequest("Maximum 5 addresses allowed per batch request.");
+            }
+
+            var results = await GeoLocationHelper.GetCoordinatesFromAddresses(addresses);
+
+            var response = results.Select(r => new
+            {
+                Address = r.Key,
+                Success = r.Value.HasValue,
+                Latitude = r.Value?.Latitude,
+                Longitude = r.Value?.Longitude,
+                GoogleMapsUrl = r.Value.HasValue 
+                    ? $"https://www.google.com/maps?q={r.Value.Value.Latitude},{r.Value.Value.Longitude}"
+                    : null
+            });
+
+            return Ok(new
+            {
+                TotalRequested = addresses.Count,
+                SuccessCount = results.Count(r => r.Value.HasValue),
+                FailedCount = results.Count(r => !r.Value.HasValue),
+                Results = response
+            });
+        }
+
+        /// <summary>
+        /// Tests distance calculation between two addresses.
+        /// POST: api/Test/distance
+        /// </summary>
+        [HttpPost("distance")]
+        public async Task<ActionResult<object>> TestDistanceCalculation(
+            [FromBody] DistanceCalculationDto dto)
+        {
+            if (string.IsNullOrWhiteSpace(dto.FromAddress) || string.IsNullOrWhiteSpace(dto.ToAddress))
+            {
+                return BadRequest("Both FromAddress and ToAddress are required.");
+            }
+
+            var fromCoords = await GeoLocationHelper.GetCoordinatesFromAddress(dto.FromAddress);
+            var toCoords = await GeoLocationHelper.GetCoordinatesFromAddress(dto.ToAddress);
+
+            if (fromCoords == null)
+            {
+                return NotFound(new { Message = "Could not find coordinates for FromAddress.", Address = dto.FromAddress });
+            }
+
+            if (toCoords == null)
+            {
+                return NotFound(new { Message = "Could not find coordinates for ToAddress.", Address = dto.ToAddress });
+            }
+
+            var distance = GeoLocationHelper.CalculateDistance(
+                fromCoords.Value.Latitude,
+                fromCoords.Value.Longitude,
+                toCoords.Value.Latitude,
+                toCoords.Value.Longitude
+            );
+
+            return Ok(new
+            {
+                FromAddress = dto.FromAddress,
+                FromCoordinates = new
+                {
+                    Latitude = fromCoords.Value.Latitude,
+                    Longitude = fromCoords.Value.Longitude
+                },
+                ToAddress = dto.ToAddress,
+                ToCoordinates = new
+                {
+                    Latitude = toCoords.Value.Latitude,
+                    Longitude = toCoords.Value.Longitude
+                },
+                DistanceInKm = distance,
+                DistanceInMeters = Math.Round(distance * 1000, 0)
+            });
         }
 
         /// <summary>

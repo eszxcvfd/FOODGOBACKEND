@@ -1,4 +1,5 @@
 ﻿using FOODGOBACKEND.Dtos.Customer;
+using FOODGOBACKEND.Helpers;
 using FOODGOBACKEND.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -117,6 +118,226 @@ namespace FOODGOBACKEND.Controllers
         }
 
         /// <summary>
+        /// Adds a new address for the authenticated customer.
+        /// Customer Use Case C-UC04: Manage addresses.
+        /// </summary>
+        /// <param name="dto">Address data to add.</param>
+        /// <returns>Created address with ID.</returns>
+        [HttpPost("addresses")]
+        public async Task<ActionResult<object>> AddAddress([FromBody] RequestAddressDto dto)
+        {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
+            var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!int.TryParse(userIdClaim, out var customerId))
+            {
+                return Unauthorized("Invalid customer token.");
+            }
+
+            // Check if customer exists
+            var customerExists = await _context.Customers
+                .AnyAsync(c => c.CustomerId == customerId);
+
+            if (!customerExists)
+            {
+                return NotFound("Customer not found.");
+            }
+
+            // If this is set as default, unset all other default addresses
+            if (dto.IsDefault)
+            {
+                var existingAddresses = await _context.Addresses
+                    .Where(a => a.CustomerId == customerId && a.IsDefault)
+                    .ToListAsync();
+
+                foreach (var addr in existingAddresses)
+                {
+                    addr.IsDefault = false;
+                }
+            }
+            else
+            {
+                // If this is the first address, make it default
+                var hasAddresses = await _context.Addresses
+                    .AnyAsync(a => a.CustomerId == customerId);
+
+                if (!hasAddresses)
+                {
+                    dto.IsDefault = true;
+                }
+            }
+
+            // Build full address if not provided
+            var fullAddress = dto.FullAddress;
+            if (string.IsNullOrWhiteSpace(fullAddress))
+            {
+                var parts = new List<string>();
+                
+                if (!string.IsNullOrWhiteSpace(dto.Street))
+                    parts.Add(dto.Street);
+                
+                if (!string.IsNullOrWhiteSpace(dto.Ward))
+                    parts.Add(dto.Ward);
+                
+                if (!string.IsNullOrWhiteSpace(dto.District))
+                    parts.Add(dto.District);
+                
+                if (!string.IsNullOrWhiteSpace(dto.City))
+                    parts.Add(dto.City);
+
+                fullAddress = string.Join(", ", parts);
+            }
+
+            // Create new address
+            var address = new Address
+            {
+                CustomerId = customerId,
+                Street = dto.Street,
+                Ward = dto.Ward,
+                District = dto.District,
+                City = dto.City,
+                FullAddress = fullAddress,
+                IsDefault = dto.IsDefault
+            };
+
+            _context.Addresses.Add(address);
+            await _context.SaveChangesAsync();
+
+            // Get customer info for response
+            var customer = await _context.Customers
+                .Include(c => c.CustomerNavigation)
+                .FirstOrDefaultAsync(c => c.CustomerId == customerId);
+
+            return Created($"/api/Customer/addresses/{address.AddressId}", new
+            {
+                address.AddressId,
+                address.CustomerId,
+                CustomerName = customer?.FullName,
+                CustomerPhone = customer?.CustomerNavigation.PhoneNumber,
+                address.Street,
+                address.Ward,
+                address.District,
+                address.City,
+                address.FullAddress,
+                address.IsDefault
+            });
+        }
+
+        /// <summary>
+        /// Gets the list of active restaurants with distance calculation from customer's default address.
+        /// Customer Use Case C-UC02: Browse restaurants.
+        /// </summary>
+        /// <param name="pageNumber">Page number for pagination (default: 1).</param>
+        /// <param name="pageSize">Number of items per page (default: 10).</param>
+        [HttpGet("restaurants")]
+        [AllowAnonymous] // Allow unauthenticated users to browse restaurants
+        public async Task<ActionResult<object>> GetRestaurants(
+            [FromQuery] int pageNumber = 1,
+            [FromQuery] int pageSize = 10)
+        {
+            // Get customer's default address if authenticated
+            string? customerDefaultAddress = null;
+            var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            
+            if (!string.IsNullOrEmpty(userIdClaim) && int.TryParse(userIdClaim, out var customerId))
+            {
+                var defaultAddress = await _context.Addresses
+                    .Where(a => a.CustomerId == customerId && a.IsDefault)
+                    .Select(a => a.FullAddress)
+                    .FirstOrDefaultAsync();
+
+                customerDefaultAddress = defaultAddress;
+            }
+
+            var query = _context.Restaurants
+                .Where(r => r.IsActive)
+                .Include(r => r.Orders)
+                    .ThenInclude(o => o.OrderItems)
+                        .ThenInclude(oi => oi.Review)
+                .AsQueryable();
+
+            var totalRecords = await query.CountAsync();
+            var totalPages = (int)Math.Ceiling(totalRecords / (double)pageSize);
+
+            var baseUrl = $"{Request.Scheme}://{Request.Host}";
+
+            var restaurants = await query
+                .OrderByDescending(r => r.RestaurantId)
+                .Skip((pageNumber - 1) * pageSize)
+                .Take(pageSize)
+                .Select(r => new
+                {
+                    r.RestaurantId,
+                    r.RestaurantName,
+                    r.Address,
+                    // Get all reviews from completed orders
+                    Reviews = r.Orders
+                        .Where(o => o.OrderStatus == "COMPLETED")
+                        .SelectMany(o => o.OrderItems)
+                        .Where(oi => oi.Review != null)
+                        .Select(oi => oi.Review!.Rating)
+                        .ToList(),
+                    // Count completed orders
+                    CompletedOrders = r.Orders
+                        .Count(o => o.OrderStatus == "COMPLETED")
+                })
+                .ToListAsync();
+
+            // Calculate distance for each restaurant
+            var result = new List<ItemRestaurantDto>();
+
+            foreach (var r in restaurants)
+            {
+                double distanceKm = 0;
+
+                // Calculate distance if customer has default address
+                if (!string.IsNullOrEmpty(customerDefaultAddress))
+                {
+                    var distance = await GeoLocationHelper.CalculateDistanceBetweenAddressesSimple(
+                        customerDefaultAddress,
+                        r.Address
+                    );
+
+                    if (distance.HasValue)
+                    {
+                        distanceKm = distance.Value;
+                    }
+                }
+
+                result.Add(new ItemRestaurantDto
+                {
+                    RestaurantId = r.RestaurantId,
+                    Name = r.RestaurantName,
+                    ImageUrl = null, // TODO: Add restaurant image support
+                    AverageRating = r.Reviews.Any() ? r.Reviews.Average() : 0,
+                    ReviewCount = r.Reviews.Count,
+                    CompletedOrderCount = r.CompletedOrders,
+                    DistanceInKm = distanceKm
+                });
+            }
+
+            // Sort by distance if customer is authenticated and has default address
+            if (!string.IsNullOrEmpty(customerDefaultAddress))
+            {
+                result = result.OrderBy(r => r.DistanceInKm).ToList();
+            }
+
+            return Ok(new
+            {
+                PageNumber = pageNumber,
+                PageSize = pageSize,
+                TotalPages = totalPages,
+                TotalRecords = totalRecords,
+                HasCustomerAddress = !string.IsNullOrEmpty(customerDefaultAddress),
+                CustomerDefaultAddress = customerDefaultAddress,
+                Data = result
+            });
+        }
+
+        /// <summary>
         /// Gets the list of available dishes for a specific restaurant.
         /// Customer Use Case C-UC03: View restaurant's menu.
         /// </summary>
@@ -146,6 +367,8 @@ namespace FOODGOBACKEND.Controllers
             var totalRecords = await query.CountAsync();
             var totalPages = (int)Math.Ceiling(totalRecords / (double)pageSize);
 
+            var baseUrl = $"{Request.Scheme}://{Request.Host}";
+
             var dishes = await query
                 .OrderByDescending(d => d.DishId)
                 .Skip((pageNumber - 1) * pageSize)
@@ -154,7 +377,7 @@ namespace FOODGOBACKEND.Controllers
                 {
                     DishId = d.DishId,
                     DishName = d.DishName,
-                    ImageUrl = d.ImageUrl,
+                    ImageUrl = d.ImageUrl != null ? $"{baseUrl}/Img/{d.ImageUrl}" : null,
                     Price = d.Price,
                     // Calculate average rating and count from associated OrderItem.Review
                     AverageRating = d.OrderItems
@@ -212,7 +435,7 @@ namespace FOODGOBACKEND.Controllers
                     DishName = d.DishName,
                     // Tạo URL đầy đủ cho ảnh
                     ImageUrl = !string.IsNullOrEmpty(d.ImageUrl) 
-                        ? (d.ImageUrl.StartsWith("http") ? d.ImageUrl : $"{baseUrl}/images/dishes/{d.ImageUrl}")
+                        ? (d.ImageUrl.StartsWith("http") ? d.ImageUrl : $"{baseUrl}/Img/{d.ImageUrl}")
                         : null,
                     Price = d.Price,
                     AverageRating = d.OrderItems
