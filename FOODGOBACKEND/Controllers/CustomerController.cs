@@ -338,6 +338,83 @@ namespace FOODGOBACKEND.Controllers
         }
 
         /// <summary>
+        /// Gets the list of reviews for a specific restaurant.
+        /// Customer Use Case: View restaurant reviews.
+        /// </summary>
+        /// <param name="restaurantId">The ID of the restaurant.</param>
+        /// <param name="pageNumber">Page number for pagination (default: 1).</param>
+        /// <param name="pageSize">Number of items per page (default: 10).</param>
+        /// <returns>Paginated list of reviews for the restaurant.</returns>
+        [HttpGet("restaurants/{restaurantId}/reviews")]
+        [AllowAnonymous] // Allow unauthenticated users to view reviews
+        public async Task<ActionResult<object>> GetRestaurantReviews(
+            int restaurantId,
+            [FromQuery] int pageNumber = 1,
+            [FromQuery] int pageSize = 10)
+        {
+            // Check if restaurant exists
+            var restaurantExists = await _context.Restaurants
+                .AnyAsync(r => r.RestaurantId == restaurantId);
+
+            if (!restaurantExists)
+            {
+                return NotFound("Restaurant not found.");
+            }
+
+            // Get all reviews for dishes belonging to this restaurant
+            var query = _context.Reviews
+                .Include(r => r.Customer)
+                .Include(r => r.OrderItem)
+                    .ThenInclude(oi => oi.Order)
+                .Include(r => r.OrderItem)
+                    .ThenInclude(oi => oi.Dish)
+                .Where(r => r.OrderItem.Dish.RestaurantId == restaurantId 
+                         && r.OrderItem.Order.OrderStatus == "COMPLETED")
+                .AsQueryable();
+
+            var totalRecords = await query.CountAsync();
+            var totalPages = (int)Math.Ceiling(totalRecords / (double)pageSize);
+
+            var reviews = await query
+                .OrderByDescending(r => r.CreatedAt)
+                .Skip((pageNumber - 1) * pageSize)
+                .Take(pageSize)
+                .Select(r => new ItemReviewDto
+                {
+                    ReviewId = r.ReviewId,
+                    UserName = r.Customer.FullName,
+                    AvatarUrl = null, // TODO: Add avatar support to User/Customer model
+                    ReviewDate = r.CreatedAt.HasValue 
+                        ? r.CreatedAt.Value.ToString("dd/MM/yyyy") 
+                        : DateTime.Now.ToString("dd/MM/yyyy"),
+                    Rating = r.Rating,
+                    Content = r.Comment
+                })
+                .ToListAsync();
+
+            // Calculate statistics
+            var allReviews = await _context.Reviews
+                .Include(r => r.OrderItem)
+                    .ThenInclude(oi => oi.Dish)
+                .Where(r => r.OrderItem.Dish.RestaurantId == restaurantId)
+                .Select(r => r.Rating)
+                .ToListAsync();
+
+            var averageRating = allReviews.Any() ? allReviews.Average() : 0;
+
+            return Ok(new
+            {
+                RestaurantId = restaurantId,
+                PageNumber = pageNumber,
+                PageSize = pageSize,
+                TotalPages = totalPages,
+                TotalRecords = totalRecords,
+                AverageRating = Math.Round(averageRating, 1),
+                Data = reviews
+            });
+        }
+
+        /// <summary>
         /// Gets the list of available dishes for a specific restaurant.
         /// Customer Use Case C-UC03: View restaurant's menu.
         /// </summary>
@@ -459,6 +536,493 @@ namespace FOODGOBACKEND.Controllers
                 TotalRecords = totalRecords,
                 Data = dishes
             });
+        }
+
+        /// <summary>
+        /// Gets the list of reviews written by the authenticated customer.
+        /// Customer Use Case: View my review history.
+        /// </summary>
+        /// <param name="pageNumber">Page number for pagination (default: 1).</param>
+        /// <param name="pageSize">Number of items per page (default: 10).</param>
+        /// <returns>Paginated list of reviews written by the customer.</returns>
+        [HttpGet("reviews/my-reviews")]
+        public async Task<ActionResult<object>> GetMyReviews(
+            [FromQuery] int pageNumber = 1,
+            [FromQuery] int pageSize = 10)
+        {
+            var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!int.TryParse(userIdClaim, out var customerId))
+            {
+                return Unauthorized("Invalid customer token.");
+            }
+
+            // Get all reviews written by this customer
+            var query = _context.Reviews
+                .Include(r => r.OrderItem)
+                    .ThenInclude(oi => oi.Dish)
+                .Include(r => r.OrderItem)
+                    .ThenInclude(oi => oi.Dish.Restaurant)
+                .Where(r => r.CustomerId == customerId)
+                .AsQueryable();
+
+            var totalRecords = await query.CountAsync();
+            var totalPages = (int)Math.Ceiling(totalRecords / (double)pageSize);
+
+            var reviews = await query
+                .OrderByDescending(r => r.CreatedAt)
+                .Skip((pageNumber - 1) * pageSize)
+                .Take(pageSize)
+                .Select(r => new ItemReviewHistoryDto
+                {
+                    ReviewId = r.ReviewId,
+                    DishName = r.OrderItem.Dish.DishName,
+                    RestaurantName = r.OrderItem.Dish.Restaurant.RestaurantName,
+                    Rating = r.Rating,
+                    Comment = r.Comment,
+                    ReviewDate = r.CreatedAt.HasValue 
+                        ? r.CreatedAt.Value.ToString("dd/MM/yyyy") 
+                        : DateTime.Now.ToString("dd/MM/yyyy")
+                })
+                .ToListAsync();
+
+            return Ok(new
+            {
+                PageNumber = pageNumber,
+                PageSize = pageSize,
+                TotalPages = totalPages,
+                TotalRecords = totalRecords,
+                Data = reviews
+            });
+        }
+
+        /// <summary>
+        /// Gets the list of available vouchers for customers.
+        /// Customer Use Case: View available vouchers/promotions.
+        /// </summary>
+        /// <param name="pageNumber">Page number for pagination (default: 1).</param>
+        /// <param name="pageSize">Number of items per page (default: 10).</param>
+        /// <returns>Paginated list of available vouchers.</returns>
+        [HttpGet("vouchers")]
+        [AllowAnonymous] // Allow all users to view available vouchers
+        public async Task<ActionResult<object>> GetAvailableVouchers(
+            [FromQuery] int pageNumber = 1,
+            [FromQuery] int pageSize = 10)
+        {
+            var now = DateTime.UtcNow;
+            
+            var query = _context.Vouchers
+                .Where(v => v.IsActive == true 
+                         && v.ValidFrom <= now 
+                         && v.ValidTo >= now
+                         && (v.MaxUsage == null || v.CurrentUsage < v.MaxUsage))
+                .AsQueryable();
+
+            var totalRecords = await query.CountAsync();
+            var totalPages = (int)Math.Ceiling(totalRecords / (double)pageSize);
+
+            var vouchers = await query
+                .OrderBy(v => v.ValidTo) // Sort by expiration date (closest expiring first)
+                .Skip((pageNumber - 1) * pageSize)
+                .Take(pageSize)
+                .Select(v => new ItemVoucherDto
+                {
+                    VoucherId = v.VoucherId,
+                    VoucherCode = v.VoucherCode,
+                    Description = v.Description,
+                    ValidTo = "HSD: " + v.ValidTo.ToString("dd/MM/yyyy")
+                })
+                .ToListAsync();
+
+            return Ok(new
+            {
+                PageNumber = pageNumber,
+                PageSize = pageSize,
+                TotalPages = totalPages,
+                TotalRecords = totalRecords,
+                Data = vouchers
+            });
+        }
+
+        /// <summary>
+        /// Gets the review screen information for the authenticated customer.
+        /// Customer Use Case: Initialize review screen with user info and current date.
+        /// </summary>
+        /// <returns>User information for the review screen.</returns>
+        [HttpGet("reviews/screen-info")]
+        public async Task<ActionResult<ResponseReviewScreenDto>> GetScreenReview()
+        {
+            var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!int.TryParse(userIdClaim, out var customerId))
+            {
+                return Unauthorized("Invalid customer token.");
+            }
+
+            // Get customer information
+            var customer = await _context.Customers
+                .FirstOrDefaultAsync(c => c.CustomerId == customerId);
+
+            if (customer == null)
+            {
+                return NotFound("Customer not found.");
+            }
+
+            var response = new ResponseReviewScreenDto
+            {
+                UserName = customer.FullName,
+                AvatarUrl = null, // TODO: Add avatar support to User/Customer model
+                CurrentDate = DateTime.Now.ToString("dd/MM/yyyy")
+            };
+
+            return Ok(response);
+        }
+
+        /// <summary>
+        /// Submits a review for a completed order item.
+        /// Customer Use Case: Write review for purchased dish.
+        /// </summary>
+        /// <param name="dto">Review data to submit.</param>
+        /// <returns>Created review with ID.</returns>
+        [HttpPost("reviews")]
+        public async Task<ActionResult<object>> SubmitOrderReview([FromBody] RequestReviewDto dto)
+        {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
+            var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!int.TryParse(userIdClaim, out var customerId))
+            {
+                return Unauthorized("Invalid customer token.");
+            }
+
+            // Verify the order item exists and belongs to this customer
+            var orderItem = await _context.OrderItems
+                .Include(oi => oi.Order)
+                .Include(oi => oi.Review)
+                .Include(oi => oi.Dish)
+                    .ThenInclude(d => d.Restaurant)
+                .FirstOrDefaultAsync(oi => oi.OrderItemId == dto.OrderItemId);
+
+            if (orderItem == null)
+            {
+                return NotFound("Order item not found.");
+            }
+
+            // Check if the order belongs to this customer
+            if (orderItem.Order.CustomerId != customerId)
+            {
+                return Forbid("You can only review your own orders.");
+            }
+
+            // Check if the order is completed
+            if (orderItem.Order.OrderStatus != "COMPLETED")
+            {
+                return BadRequest("You can only review completed orders.");
+            }
+
+            // Check if this order item has already been reviewed
+            if (orderItem.Review != null)
+            {
+                return Conflict("This order item has already been reviewed.");
+            }
+
+            // Create new review
+            var review = new Review
+            {
+                OrderItemId = dto.OrderItemId,
+                CustomerId = customerId,
+                Rating = dto.Rating,
+                Comment = dto.Comment,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _context.Reviews.Add(review);
+            await _context.SaveChangesAsync();
+
+            return Created($"/api/Customer/reviews/{review.ReviewId}", new
+            {
+                review.ReviewId,
+                review.OrderItemId,
+                DishName = orderItem.Dish.DishName,
+                RestaurantName = orderItem.Dish.Restaurant.RestaurantName,
+                review.Rating,
+                review.Comment,
+                ReviewDate = review.CreatedAt?.ToString("dd/MM/yyyy"),
+                Message = "Review submitted successfully."
+            });
+        }
+
+        /// <summary>
+        /// Gets the profile information for the authenticated customer.
+        /// Customer Use Case: View user profile.
+        /// </summary>
+        /// <returns>Customer profile information.</returns>
+        [HttpGet("profile")]
+        public async Task<ActionResult<ResponseUserProfileDto>> GetUserProfile()
+        {
+            var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!int.TryParse(userIdClaim, out var customerId))
+            {
+                return Unauthorized("Invalid customer token.");
+            }
+
+            // Get customer information with user navigation
+            var customer = await _context.Customers
+                .Include(c => c.CustomerNavigation)
+                .FirstOrDefaultAsync(c => c.CustomerId == customerId);
+
+            if (customer == null)
+            {
+                return NotFound("Customer not found.");
+            }
+
+            var response = new ResponseUserProfileDto
+            {
+                FullName = customer.FullName,
+                PhoneNumber = customer.CustomerNavigation.PhoneNumber,
+                Email = customer.Email,
+                AvatarUrl = null // TODO: Add avatar support to User/Customer model
+            };
+
+            return Ok(response);
+        }
+
+        /// <summary>
+        /// Updates the profile information for the authenticated customer.
+        /// Customer Use Case: Edit user profile.
+        /// </summary>
+        /// <param name="dto">Updated profile data.</param>
+        /// <returns>Updated profile information.</returns>
+        [HttpPut("profile")]
+        public async Task<ActionResult<ResponseUserProfileDto>> UpdateUserProfile([FromBody] RequestUserProfileDto dto)
+        {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
+            var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!int.TryParse(userIdClaim, out var customerId))
+            {
+                return Unauthorized("Invalid customer token.");
+            }
+
+            // Get customer with user navigation
+            var customer = await _context.Customers
+                .Include(c => c.CustomerNavigation)
+                .FirstOrDefaultAsync(c => c.CustomerId == customerId);
+
+            if (customer == null)
+            {
+                return NotFound("Customer not found.");
+            }
+
+            // Check if phone number is being changed and if it's already taken
+            if (dto.PhoneNumber != customer.CustomerNavigation.PhoneNumber)
+            {
+                var phoneExists = await _context.Users
+                    .AnyAsync(u => u.PhoneNumber == dto.PhoneNumber && u.UserId != customerId);
+
+                if (phoneExists)
+                {
+                    return Conflict("Phone number is already in use by another user.");
+                }
+
+                // Update phone number in User table
+                customer.CustomerNavigation.PhoneNumber = dto.PhoneNumber;
+            }
+
+            // Check if email is being changed and if it's already taken
+            if (!string.IsNullOrEmpty(dto.Email) && dto.Email != customer.Email)
+            {
+                var emailExists = await _context.Customers
+                    .AnyAsync(c => c.Email == dto.Email && c.CustomerId != customerId);
+
+                if (emailExists)
+                {
+                    return Conflict("Email is already in use by another customer.");
+                }
+            }
+
+            // Update customer information
+            customer.FullName = dto.FullName;
+            customer.Email = dto.Email;
+            // TODO: Handle avatar upload/update when avatar feature is implemented
+            // customer.AvatarUrl = dto.AvatarUrl;
+
+            await _context.SaveChangesAsync();
+
+            var response = new ResponseUserProfileDto
+            {
+                FullName = customer.FullName,
+                PhoneNumber = customer.CustomerNavigation.PhoneNumber,
+                Email = customer.Email,
+                AvatarUrl = dto.AvatarUrl // TODO: Return actual avatar URL after implementation
+            };
+
+            return Ok(response);
+        }
+
+        /// <summary>
+        /// Gets detailed information for a specific order.
+        /// Customer Use Case: View order details.
+        /// </summary>
+        /// <param name="orderId">The ID of the order.</param>
+        /// <returns>Detailed order information.</returns>
+        [HttpGet("orders/{orderId}")]
+        public async Task<ActionResult<ResponseOrderDetailDto>> GetOrderDetail(int orderId)
+        {
+            var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!int.TryParse(userIdClaim, out var customerId))
+            {
+                return Unauthorized("Invalid customer token.");
+            }
+
+            // Load order with all related data
+            var order = await _context.Orders
+                .Include(o => o.Customer)
+                    .ThenInclude(c => c.CustomerNavigation)
+                .Include(o => o.Restaurant)
+                .Include(o => o.Shipper)
+                    .ThenInclude(s => s!.ShipperNavigation)
+                .Include(o => o.OrderItems)
+                    .ThenInclude(oi => oi.Dish)
+                .Include(o => o.OrderVouchers)
+                    .ThenInclude(ov => ov.Voucher)
+                .Include(o => o.Payments)
+                .FirstOrDefaultAsync(o => o.OrderId == orderId);
+
+            if (order == null)
+            {
+                return NotFound("Order not found.");
+            }
+
+            // Verify ownership
+            if (order.CustomerId != customerId)
+            {
+                return Forbid("You can only view your own orders.");
+            }
+
+            // Map status to Vietnamese text
+            var statusText = order.OrderStatus switch
+            {
+                "PENDING" => "Đang tìm Tài xế...",
+                "CONFIRMED" => "Đã xác nhận",
+                "PREPARING" => "Đang chuẩn bị",
+                "DELIVERING" => "Đang giao hàng",
+                "COMPLETED" => "Đã hoàn thành",
+                "CANCELLED" => "Đã hủy",
+                _ => "Không xác định"
+            };
+
+            // Calculate estimated delivery time using GeoLocationHelper
+            string? estimatedDeliveryTime = null;
+            
+            if (order.OrderStatus == "COMPLETED")
+            {
+                // Order already completed
+                if (order.CompletedAt.HasValue)
+                {
+                    estimatedDeliveryTime = $"Đã giao lúc {order.CompletedAt.Value:HH:mm}";
+                }
+            }
+            else if (order.OrderStatus == "CANCELLED")
+            {
+                // Order cancelled
+                if (order.CancelledAt.HasValue)
+                {
+                    estimatedDeliveryTime = $"Đã hủy lúc {order.CancelledAt.Value:HH:mm}";
+                }
+            }
+            else
+            {
+                // Calculate estimated time for active orders
+                var estimatedMinutes = await GeoLocationHelper.CalculateEstimatedDeliveryTime(
+                    order.OrderStatus,
+                    order.Restaurant.Address,
+                    order.DeliveryAddress,
+                    (double?)order.Shipper?.CurrentLat,
+                    (double?)order.Shipper?.CurrentLng,
+                    order.ConfirmedAt,
+                    order.PreparedAt,
+                    order.DeliveringAt
+                );
+                
+                if (estimatedMinutes > 0)
+                {
+                    var baseTime = DateTime.Now;
+                    var est1 = baseTime.AddMinutes(estimatedMinutes);
+                    var est2 = baseTime.AddMinutes(estimatedMinutes + 10); // Add 10 min buffer
+                    estimatedDeliveryTime = $"Dự kiến giao lúc {est1:HH:mm} – {est2:HH:mm}";
+                }
+            }
+
+            // Shipper info (null if not assigned)
+            ShipperInfoDto? shipperInfo = null;
+            if (order.Shipper != null)
+            {
+                shipperInfo = new ShipperInfoDto
+                {
+                    FullName = order.Shipper.FullName,
+                    PhoneNumber = order.Shipper.ShipperNavigation.PhoneNumber
+                };
+            }
+
+            // Address info
+            var addressInfo = new AddressInfoDto
+            {
+                RestaurantName = order.Restaurant.RestaurantName,
+                RestaurantAddress = order.Restaurant.Address,
+                DeliveryAddress = order.DeliveryAddress,
+                CustomerName = order.Customer.FullName,
+                CustomerPhone = order.Customer.CustomerNavigation.PhoneNumber
+            };
+
+            // Order items
+            var items = order.OrderItems.Select(oi => new OrderItemDetailDto
+            {
+                DishName = oi.Dish.DishName,
+                Quantity = oi.Quantity,
+                PriceAtOrder = oi.PriceAtOrder
+            }).ToList();
+
+            // Calculate discount amount
+            var discountAmount = order.OrderVouchers.Sum(ov => ov.DiscountApplied);
+
+            // Calculate service fee
+            var serviceFee = order.TotalAmount - order.Subtotal - order.ShippingFee + discountAmount;
+            if (serviceFee < 0) serviceFee = 0;
+
+            // Payment status
+            var paymentStatus = order.Payments.Any() 
+                ? order.Payments.First().PaymentStatus ?? "PENDING"
+                : "PENDING";
+
+            var summary = new OrderSummaryDto
+            {
+                Items = items,
+                Subtotal = order.Subtotal,
+                ShippingFee = order.ShippingFee,
+                ServiceFee = serviceFee,
+                DiscountAmount = discountAmount,
+                GrandTotal = order.TotalAmount,
+                PaymentStatusText = paymentStatus
+            };
+
+            var response = new ResponseOrderDetailDto
+            {
+                StatusText = statusText,
+                EstimatedDeliveryTime = estimatedDeliveryTime,
+                OrderStatusKey = order.OrderStatus,
+                OrderCode = order.OrderCode,
+                Note = order.Note,
+                ShipperInfo = shipperInfo,
+                AddressInfo = addressInfo,
+                Summary = summary
+            };
+
+            return Ok(response);
         }
     }
 }

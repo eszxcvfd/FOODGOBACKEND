@@ -16,6 +16,11 @@ namespace FOODGOBACKEND.Helpers
             Timeout = TimeSpan.FromSeconds(10)
         };
 
+        // Constants for delivery time estimation
+        private const int PREP_TIME_MINUTES = 10; // Time for restaurant to prepare food
+        private const int DEFAULT_SHIPPER_TO_RESTAURANT_TIME = 15; // Default time if no shipper assigned
+        private const int AVG_SPEED_KM_PER_HOUR = 30; // Average speed for delivery (30 km/h)
+
         /// <summary>
         /// Calculates the distance between two geographic coordinates using the Haversine formula.
         /// </summary>
@@ -180,6 +185,168 @@ namespace FOODGOBACKEND.Helpers
             {
                 return null;
             }
+        }
+
+        /// <summary>
+        /// Calculate estimated delivery time based on order status and distances.
+        /// Formula: Prep time (10 min) + Shipper pickup + Delivery
+        /// </summary>
+        /// <param name="orderStatus">Current order status.</param>
+        /// <param name="restaurantAddress">Restaurant address.</param>
+        /// <param name="deliveryAddress">Customer delivery address.</param>
+        /// <param name="shipperLat">Shipper's current latitude (optional).</param>
+        /// <param name="shipperLng">Shipper's current longitude (optional).</param>
+        /// <param name="confirmedAt">Order confirmed timestamp (optional).</param>
+        /// <param name="preparedAt">Order prepared timestamp (optional).</param>
+        /// <param name="deliveringAt">Order delivering timestamp (optional).</param>
+        /// <returns>Estimated time in minutes.</returns>
+        public static async Task<int> CalculateEstimatedDeliveryTime(
+            string orderStatus,
+            string restaurantAddress,
+            string deliveryAddress,
+            double? shipperLat = null,
+            double? shipperLng = null,
+            DateTime? confirmedAt = null,
+            DateTime? preparedAt = null,
+            DateTime? deliveringAt = null)
+        {
+            var totalMinutes = 0;
+
+            switch (orderStatus.ToUpper())
+            {
+                case "PENDING":
+                case "CONFIRMED":
+                    // Order is waiting: Prep time + Shipper pickup + Delivery
+                    totalMinutes += PREP_TIME_MINUTES;
+                    
+                    // Time for shipper to reach restaurant
+                    if (shipperLat.HasValue && shipperLng.HasValue)
+                    {
+                        // Calculate actual distance from shipper's current location to restaurant
+                        var shipperToRestaurantResult = await CalculateDistanceBetweenAddresses(
+                            $"{shipperLat},{shipperLng}",
+                            restaurantAddress
+                        );
+                        
+                        if (shipperToRestaurantResult.Success && shipperToRestaurantResult.DistanceKm > 0)
+                        {
+                            var shipperPickupTime = (int)Math.Ceiling((shipperToRestaurantResult.DistanceKm / AVG_SPEED_KM_PER_HOUR) * 60);
+                            totalMinutes += shipperPickupTime;
+                        }
+                        else
+                        {
+                            totalMinutes += DEFAULT_SHIPPER_TO_RESTAURANT_TIME;
+                        }
+                    }
+                    else
+                    {
+                        // No shipper assigned yet, use default time
+                        totalMinutes += DEFAULT_SHIPPER_TO_RESTAURANT_TIME;
+                    }
+                    
+                    // Time from restaurant to customer
+                    var deliveryResult = await CalculateDistanceBetweenAddresses(
+                        restaurantAddress,
+                        deliveryAddress
+                    );
+                    
+                    if (deliveryResult.Success && deliveryResult.DistanceKm > 0)
+                    {
+                        var deliveryTime = (int)Math.Ceiling((deliveryResult.DistanceKm / AVG_SPEED_KM_PER_HOUR) * 60);
+                        totalMinutes += deliveryTime;
+                    }
+                    else
+                    {
+                        totalMinutes += 20; // Fallback: 20 minutes
+                    }
+                    break;
+
+                case "PREPARING":
+                    // Food is being prepared: remaining prep time + delivery time
+                    if (confirmedAt.HasValue)
+                    {
+                        var prepElapsed = (int)(DateTime.UtcNow - confirmedAt.Value).TotalMinutes;
+                        var remainingPrepTime = Math.Max(0, PREP_TIME_MINUTES - prepElapsed);
+                        totalMinutes += remainingPrepTime;
+                    }
+                    else
+                    {
+                        totalMinutes += PREP_TIME_MINUTES;
+                    }
+                    
+                    // Time for shipper to pick up (if not already picked up)
+                    if (!preparedAt.HasValue)
+                    {
+                        if (shipperLat.HasValue && shipperLng.HasValue)
+                        {
+                            var shipperToRestaurantResult = await CalculateDistanceBetweenAddresses(
+                                $"{shipperLat},{shipperLng}",
+                                restaurantAddress
+                            );
+                            
+                            if (shipperToRestaurantResult.Success)
+                            {
+                                var shipperPickupTime = (int)Math.Ceiling((shipperToRestaurantResult.DistanceKm / AVG_SPEED_KM_PER_HOUR) * 60);
+                                totalMinutes += shipperPickupTime;
+                            }
+                        }
+                        else
+                        {
+                            totalMinutes += DEFAULT_SHIPPER_TO_RESTAURANT_TIME;
+                        }
+                    }
+                    
+                    // Time from restaurant to customer
+                    var prepDeliveryResult = await CalculateDistanceBetweenAddresses(
+                        restaurantAddress,
+                        deliveryAddress
+                    );
+                    
+                    if (prepDeliveryResult.Success && prepDeliveryResult.DistanceKm > 0)
+                    {
+                        var deliveryTime = (int)Math.Ceiling((prepDeliveryResult.DistanceKm / AVG_SPEED_KM_PER_HOUR) * 60);
+                        totalMinutes += deliveryTime;
+                    }
+                    else
+                    {
+                        totalMinutes += 20;
+                    }
+                    break;
+
+                case "DELIVERING":
+                    // Food is on the way: only remaining delivery time
+                    var deliveringResult = await CalculateDistanceBetweenAddresses(
+                        restaurantAddress,
+                        deliveryAddress
+                    );
+                    
+                    if (deliveringResult.Success && deliveringResult.DistanceKm > 0)
+                    {
+                        var deliveryTime = (int)Math.Ceiling((deliveringResult.DistanceKm / AVG_SPEED_KM_PER_HOUR) * 60);
+                        
+                        // If we have DeliveringAt timestamp, subtract elapsed time
+                        if (deliveringAt.HasValue)
+                        {
+                            var deliveryElapsed = (int)(DateTime.UtcNow - deliveringAt.Value).TotalMinutes;
+                            totalMinutes = Math.Max(5, deliveryTime - deliveryElapsed); // At least 5 minutes
+                        }
+                        else
+                        {
+                            totalMinutes = deliveryTime;
+                        }
+                    }
+                    else
+                    {
+                        totalMinutes = 15; // Default 15 minutes
+                    }
+                    break;
+
+                default:
+                    totalMinutes = 0;
+                    break;
+            }
+
+            return totalMinutes;
         }
 
         /// <summary>
