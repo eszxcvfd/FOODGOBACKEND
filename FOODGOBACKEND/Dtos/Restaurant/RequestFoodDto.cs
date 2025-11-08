@@ -4,12 +4,10 @@ namespace FOODGOBACKEND.Dtos.Restaurant
 {
     /// <summary>
     /// Request DTO for creating or updating dish/food information.
+    /// Restaurant ID is automatically determined from authenticated user.
     /// </summary>
     public class RequestFoodDto
     {
-        [Required(ErrorMessage = "Restaurant ID is required.")]
-        public int RestaurantId { get; set; }
-
         [Required(ErrorMessage = "Dish name is required.")]
         [StringLength(150, ErrorMessage = "Dish name cannot exceed 150 characters.")]
         public string DishName { get; set; } = null!;
@@ -23,7 +21,7 @@ namespace FOODGOBACKEND.Dtos.Restaurant
 
         [StringLength(500, ErrorMessage = "Image URL cannot exceed 500 characters.")]
         [Url(ErrorMessage = "Invalid URL format.")]
-        public string? ImageUrl { get; set; }
+        public IFormFile? ImageUrl { get; set; }
 
         public bool IsAvailable { get; set; } = true;
     }

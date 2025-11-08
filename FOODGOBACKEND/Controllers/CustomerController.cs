@@ -21,6 +21,185 @@ namespace FOODGOBACKEND.Controllers
         }
 
         /// <summary>
+        /// Creates a new order for the authenticated customer.
+        /// Customer Use Case C-UC05: Create order.
+        /// Uses customer's default address for delivery.
+        /// Default payment method: CASH.
+        /// </summary>
+        /// <param name="dto">Order data to create.</param>
+        /// <returns>Created order with details.</returns>
+        [HttpPost("orders")]
+        public async Task<ActionResult<ResponseOrderDto>> CreateOrder([FromBody] RequestOrderDto dto)
+        {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
+            var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!int.TryParse(userIdClaim, out var customerId))
+            {
+                return Unauthorized("Invalid customer token.");
+            }
+
+            // Verify customer exists
+            var customer = await _context.Customers
+                .Include(c => c.CustomerNavigation)
+                .FirstOrDefaultAsync(c => c.CustomerId == customerId);
+
+            if (customer == null)
+            {
+                return NotFound("Customer not found.");
+            }
+
+            // Get customer's default address
+            var defaultAddress = await _context.Addresses
+                .Where(a => a.CustomerId == customerId && a.IsDefault)
+                .FirstOrDefaultAsync();
+
+            if (defaultAddress == null)
+            {
+                return BadRequest("Customer must have a default delivery address. Please add an address first.");
+            }
+
+            // Verify restaurant exists and is active
+            var restaurant = await _context.Restaurants
+                .FirstOrDefaultAsync(r => r.RestaurantId == dto.RestaurantId && r.IsActive);
+
+            if (restaurant == null)
+            {
+                return NotFound("Restaurant not found or is not active.");
+            }
+
+            // Verify all dishes exist, are available, and belong to the restaurant
+            var dishIds = dto.Items.Select(i => i.DishId).Distinct().ToList();
+            var dishes = await _context.Dishes
+                .Where(d => dishIds.Contains(d.DishId) 
+                         && d.RestaurantId == dto.RestaurantId 
+                         && d.IsAvailable)
+                .ToListAsync();
+
+            if (dishes.Count != dishIds.Count)
+            {
+                return BadRequest("One or more dishes are not available or do not belong to this restaurant.");
+            }
+
+            // Calculate subtotal
+            decimal subtotal = 0;
+            var orderItems = new List<OrderItem>();
+
+            foreach (var item in dto.Items)
+            {
+                var dish = dishes.First(d => d.DishId == item.DishId);
+                var itemTotal = dish.Price * item.Quantity;
+                subtotal += itemTotal;
+
+                orderItems.Add(new OrderItem
+                {
+                    DishId = item.DishId,
+                    Quantity = item.Quantity,
+                    PriceAtOrder = dish.Price
+                });
+            }
+
+            // Calculate shipping fee based on distance
+            decimal shippingFee = 0;
+            try
+            {
+                var distance = await GeoLocationHelper.CalculateDistanceBetweenAddressesSimple(
+                    restaurant.Address,
+                    defaultAddress.FullAddress
+                );
+
+                if (distance.HasValue)
+                {
+                    // Base fee 15,000 VND for first 3km, then 5,000 VND per additional km
+                    shippingFee = 15000;
+                    if (distance.Value > 3)
+                    {
+                        shippingFee += (decimal)Math.Ceiling(distance.Value - 3) * 5000;
+                    }
+                }
+                else
+                {
+                    // Default shipping fee if distance calculation fails
+                    shippingFee = 20000;
+                }
+            }
+            catch
+            {
+                // Default shipping fee if distance calculation fails
+                shippingFee = 20000;
+            }
+
+            // Calculate total amount (no voucher applied by default)
+            decimal totalAmount = subtotal + shippingFee;
+
+            // Generate unique order code
+            var orderCode = $"FDG-{DateTime.UtcNow:yyyyMMddHHmmss}";
+
+            // Create order with default values
+            var order = new Order
+            {
+                CustomerId = customerId,
+                RestaurantId = dto.RestaurantId,
+                OrderCode = orderCode,
+                DeliveryAddress = defaultAddress.FullAddress,
+                Note = null, // No note by default
+                Subtotal = subtotal,
+                ShippingFee = shippingFee,
+                TotalAmount = totalAmount,
+                OrderStatus = "PENDING",
+                CreatedAt = DateTime.UtcNow,
+                OrderItems = orderItems
+            };
+
+            _context.Orders.Add(order);
+            await _context.SaveChangesAsync();
+
+            // Create payment record with default payment method (CASH)
+            var payment = new Payment
+            {
+                OrderId = order.OrderId,
+                Amount = totalAmount,
+                PaymentMethod = "CASH", // Default payment method
+                PaymentStatus = "PENDING",
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _context.Payments.Add(payment);
+            await _context.SaveChangesAsync();
+
+            // Prepare response
+            var response = new ResponseOrderDto
+            {
+                OrderId = order.OrderId,
+                OrderCode = order.OrderCode,
+                RestaurantName = restaurant.RestaurantName,
+                DeliveryAddress = order.DeliveryAddress,
+                Note = order.Note,
+                Subtotal = order.Subtotal,
+                ShippingFee = order.ShippingFee,
+                DiscountAmount = 0, // No discount applied
+                TotalAmount = order.TotalAmount,
+                OrderStatus = order.OrderStatus,
+                PaymentMethod = payment.PaymentMethod,
+                PaymentStatus = payment.PaymentStatus,
+                CreatedAt = order.CreatedAt ?? DateTime.UtcNow,
+                Items = orderItems.Select(oi => new ResponseOrderItemDto
+                {
+                    DishId = oi.DishId,
+                    DishName = dishes.First(d => d.DishId == oi.DishId).DishName,
+                    Quantity = oi.Quantity,
+                    PriceAtOrder = oi.PriceAtOrder,
+                    Total = oi.Quantity * oi.PriceAtOrder
+                }).ToList()
+            };
+
+            return Created($"/api/Customer/orders/{order.OrderId}", response);
+        }
+
+        /// <summary>
         /// Gets the order history for the authenticated customer.
         /// Customer Use Case C-UC06: View order history.
         /// </summary>

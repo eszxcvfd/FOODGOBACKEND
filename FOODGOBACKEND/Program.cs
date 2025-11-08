@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
+using Microsoft.Extensions.FileProviders; // <-- Add this using directive
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -51,6 +52,14 @@ app.UseHttpsRedirection();
 
 // IMPORTANT: Add this BEFORE UseRouting
 app.UseStaticFiles(); // Enable serving static files from wwwroot
+
+// If you need to serve files from a specific directory
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider(
+        Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "Img")),
+    RequestPath = "/Img"
+});
 
 // Add Authentication middleware
 app.UseAuthentication();
