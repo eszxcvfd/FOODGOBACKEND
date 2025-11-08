@@ -127,6 +127,278 @@ namespace FOODGOBACKEND.Controllers
         }
 
         /// <summary>
+        /// Gets the list of available orders near the shipper's current location for free pick.
+        /// Shipper can browse and choose which order to deliver.
+        /// Shipper Use Case S-UC06: Browse available orders for free pick.
+        /// </summary>
+        /// <param name="pageNumber">Page number for pagination (default: 1).</param>
+        /// <param name="pageSize">Number of items per page (default: 10).</param>
+        /// <param name="maxDistanceKm">Maximum distance in kilometers to filter orders (default: 10km).</param>
+        /// <returns>List of available orders sorted by distance.</returns>
+        [HttpGet("orders/free-pick")]
+        public async Task<ActionResult<object>> GetOrderFreePick(
+            [FromQuery] int pageNumber = 1,
+            [FromQuery] int pageSize = 10,
+            [FromQuery] double maxDistanceKm = 10.0)
+        {
+            var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!int.TryParse(userIdClaim, out var shipperId))
+            {
+                return Unauthorized("Invalid shipper token.");
+            }
+
+            // Get shipper information with location
+            var shipper = await _context.Shippers
+                .FirstOrDefaultAsync(s => s.ShipperId == shipperId);
+
+            if (shipper == null)
+            {
+                return NotFound("Shipper not found.");
+            }
+
+            // Check if shipper is available
+            if (!shipper.IsAvailable)
+            {
+                return Ok(new
+                {
+                    Message = "You are currently on break. Turn on availability to see orders.",
+                    PageNumber = pageNumber,
+                    PageSize = pageSize,
+                    TotalPages = 0,
+                    TotalRecords = 0,
+                    Data = new List<ItemFoodFreePickDto>()
+                });
+            }
+
+            // Check if shipper has location data
+            if (shipper.CurrentLat == null || shipper.CurrentLng == null)
+            {
+                return BadRequest("Please update your location first to see available orders.");
+            }
+
+            // Check if shipper already has a pending or confirmed order
+            var hasActiveOrder = await _context.Orders
+                .AnyAsync(o => o.ShipperId == shipperId 
+                            && (o.OrderStatus == "PENDING" 
+                             || o.OrderStatus == "CONFIRMED" 
+                             || o.OrderStatus == "PREPARING" 
+                             || o.OrderStatus == "DELIVERING"));
+
+            if (hasActiveOrder)
+            {
+                return BadRequest("You already have an active order. Please complete it first before picking a new one.");
+            }
+
+            // Get all PENDING orders without shipper assignment
+            var pendingOrders = await _context.Orders
+                .Include(o => o.Restaurant)
+                .Include(o => o.OrderItems)
+                    .ThenInclude(oi => oi.Dish)
+                .Where(o => o.ShipperId == null && o.OrderStatus == "PENDING")
+                .OrderBy(o => o.CreatedAt)
+                .ToListAsync();
+
+            if (!pendingOrders.Any())
+            {
+                return Ok(new
+                {
+                    Message = "No available orders at the moment.",
+                    PageNumber = pageNumber,
+                    PageSize = pageSize,
+                    TotalPages = 0,
+                    TotalRecords = 0,
+                    Data = new List<ItemFoodFreePickDto>()
+                });
+            }
+
+            // Calculate distance for each order and filter by max distance
+            var ordersWithDistance = new List<(Order order, double distanceKm)>();
+
+            foreach (var order in pendingOrders)
+            {
+                try
+                {
+                    var distance = await GeoLocationHelper.CalculateDistanceBetweenAddressesSimple(
+                        $"{shipper.CurrentLat},{shipper.CurrentLng}",
+                        order.Restaurant.Address
+                    );
+
+                    if (distance.HasValue && distance.Value <= maxDistanceKm)
+                    {
+                        ordersWithDistance.Add((order, distance.Value));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Log error but continue with other orders
+                    Console.WriteLine($"Error calculating distance for order {order.OrderId}: {ex.Message}");
+                    continue;
+                }
+            }
+
+            // Sort by distance (nearest first)
+            ordersWithDistance = ordersWithDistance.OrderBy(x => x.distanceKm).ToList();
+
+            var totalRecords = ordersWithDistance.Count;
+            var totalPages = (int)Math.Ceiling(totalRecords / (double)pageSize);
+
+            // Apply pagination
+            var paginatedOrders = ordersWithDistance
+                .Skip((pageNumber - 1) * pageSize)
+                .Take(pageSize)
+                .ToList();
+
+            // Map to DTO
+            var result = new List<ItemFoodFreePickDto>();
+
+            var baseUrl = $"{Request.Scheme}://{Request.Host}";
+
+            foreach (var (order, distanceKm) in paginatedOrders)
+            {
+                // Calculate shipper income (70% of shipping fee)
+                var shipperIncome = order.ShippingFee * 0.7m;
+
+                // Generate main dish summary (first item)
+                var firstItem = order.OrderItems.FirstOrDefault();
+                var mainDish = firstItem != null 
+                    ? $"{firstItem.Quantity}x {firstItem.Dish.DishName}"
+                    : "Không có món";
+
+                // Generate more items text
+                var remainingItemsCount = order.OrderItems.Count - 1;
+                var moreItems = remainingItemsCount > 0 
+                    ? $"+ {remainingItemsCount} món khác" 
+                    : null;
+
+                // Format distance
+                var distanceText = $"Cách bạn {distanceKm:F1} km";
+
+                // Format destination
+                var destination = $"Giao tới: {order.DeliveryAddress}";
+
+                // Format total price
+                var totalPrice = $"Tổng: {order.TotalAmount:N0}đ";
+
+                // Format income
+                var income = $"Thu nhập: {shipperIncome:N0}đ";
+
+                // TODO: Add restaurant logo support in the future
+                // For now, we can use a placeholder or null
+                string? shopLogoUrl = null;
+
+                result.Add(new ItemFoodFreePickDto
+                {
+                    OrderId = order.OrderId,
+                    ShopLogoUrl = shopLogoUrl,
+                    ShopName = order.Restaurant.RestaurantName,
+                    Distance = distanceText,
+                    MainDish = mainDish,
+                    MoreItems = moreItems,
+                    Destination = destination,
+                    TotalPrice = totalPrice,
+                    Income = income
+                });
+            }
+
+            return Ok(new
+            {
+                Message = $"Found {totalRecords} available orders within {maxDistanceKm}km.",
+                PageNumber = pageNumber,
+                PageSize = pageSize,
+                TotalPages = totalPages,
+                TotalRecords = totalRecords,
+                MaxDistanceKm = maxDistanceKm,
+                ShipperLocation = new
+                {
+                    Latitude = shipper.CurrentLat,
+                    Longitude = shipper.CurrentLng
+                },
+                Data = result
+            });
+        }
+
+        /// <summary>
+        /// Picks/claims an available order from the free pick list.
+        /// The order will be assigned to the shipper and status changed to CONFIRMED.
+        /// Shipper Use Case S-UC07: Pick/claim an available order.
+        /// </summary>
+        /// <param name="orderId">The ID of the order to pick.</param>
+        [HttpPost("orders/{orderId}/pick")]
+        public async Task<ActionResult<object>> PickOrder(int orderId)
+        {
+            var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!int.TryParse(userIdClaim, out var shipperId))
+            {
+                return Unauthorized("Invalid shipper token.");
+            }
+
+            var shipper = await _context.Shippers
+                .FirstOrDefaultAsync(s => s.ShipperId == shipperId);
+
+            if (shipper == null)
+            {
+                return NotFound("Shipper not found.");
+            }
+
+            // Check if shipper is available
+            if (!shipper.IsAvailable)
+            {
+                return BadRequest("You are currently on break. Turn on availability to pick orders.");
+            }
+
+            // Check if shipper already has an active order
+            var hasActiveOrder = await _context.Orders
+                .AnyAsync(o => o.ShipperId == shipperId 
+                            && (o.OrderStatus == "PENDING" 
+                             || o.OrderStatus == "CONFIRMED" 
+                             || o.OrderStatus == "PREPARING" 
+                             || o.OrderStatus == "DELIVERING"));
+
+            if (hasActiveOrder)
+            {
+                return BadRequest("You already have an active order. Please complete it first before picking a new one.");
+            }
+
+            // Get the order
+            var order = await _context.Orders
+                .Include(o => o.Restaurant)
+                .FirstOrDefaultAsync(o => o.OrderId == orderId);
+
+            if (order == null)
+            {
+                return NotFound("Order not found.");
+            }
+
+            // Check if order is still available
+            if (order.OrderStatus != "PENDING")
+            {
+                return BadRequest($"Order is no longer available. Current status: {order.OrderStatus}");
+            }
+
+            if (order.ShipperId != null)
+            {
+                return BadRequest("This order has already been picked by another shipper.");
+            }
+
+            // Assign the order to the shipper
+            order.ShipperId = shipperId;
+            order.OrderStatus = "CONFIRMED";
+            order.ConfirmedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                Message = "Order picked successfully! You can now proceed to the restaurant.",
+                OrderId = order.OrderId,
+                OrderCode = order.OrderCode,
+                RestaurantName = order.Restaurant.RestaurantName,
+                RestaurantAddress = order.Restaurant.Address,
+                Status = order.OrderStatus
+            });
+        }
+
+        /// <summary>
         /// Background process to assign pending orders to the 3 nearest available shippers.
         /// This method is called automatically when a shipper checks for orders.
         /// </summary>
