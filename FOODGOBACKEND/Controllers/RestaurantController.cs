@@ -27,6 +27,262 @@ namespace FOODGOBACKEND.Controllers
         }
 
         /// <summary>
+        /// Creates a new dish with image upload.
+        /// Restaurant Use Case R-UC07: Manage menu items.
+        /// Restaurant ID is automatically determined from authenticated token.
+        /// </summary>
+        [HttpPost("foods")]
+        [Consumes("multipart/form-data")]
+        public async Task<ActionResult<object>> CreateFood([FromForm] RequestFoodDto model)
+        {
+            if (model == null) return BadRequest("Invalid form data.");
+            if (string.IsNullOrWhiteSpace(model.DishName))
+                return BadRequest("Dish name is required.");
+            if (model.Price < 0) return BadRequest("Price must be greater than or equal to 0.");
+
+            var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!int.TryParse(userIdClaim, out var ownerId))
+                return Unauthorized("Invalid restaurant token.");
+
+            var restaurant = await _context.Restaurants.FirstOrDefaultAsync(r => r.OwnerId == ownerId);
+            if (restaurant == null) return NotFound("Restaurant not found.");
+
+            string? imageUrl = null;
+            var imageFile = model.ImageUrl;
+            if (imageFile != null && imageFile.Length > 0)
+            {
+                var allowedExtensions = new[] { ".jpg", ".jpeg", ".png", ".gif", ".webp" };
+                var fileExtension = Path.GetExtension(imageFile.FileName).ToLowerInvariant();
+                if (!allowedExtensions.Contains(fileExtension))
+                    return BadRequest("Invalid file type. Allowed: jpg, jpeg, png, gif, webp");
+                if (imageFile.Length > 5 * 1024 * 1024)
+                    return BadRequest("File size must not exceed 5MB.");
+
+                // Save to wwwroot/dish
+                var fileName = $"{Guid.NewGuid()}{fileExtension}";
+                var dishDirectory = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "dish");
+                if (!Directory.Exists(dishDirectory)) Directory.CreateDirectory(dishDirectory);
+                var filePath = Path.Combine(dishDirectory, fileName);
+
+                await using (var stream = new FileStream(filePath, FileMode.Create))
+                {
+                    await imageFile.CopyToAsync(stream);
+                }
+
+                // Store only filename in database
+                imageUrl = fileName;
+            }
+
+            var dish = new Dish
+            {
+                RestaurantId = restaurant.RestaurantId,
+                DishName = model.DishName,
+                Description = model.Description,
+                Price = model.Price,
+                ImageUrl = imageUrl,
+                IsAvailable = model.IsAvailable
+            };
+
+            _context.Dishes.Add(dish);
+            await _context.SaveChangesAsync();
+
+            // Build full URL for response
+            var fullImageUrl = !string.IsNullOrEmpty(dish.ImageUrl)
+                ? $"{Request.Scheme}://{Request.Host}/dish/{dish.ImageUrl}"
+                : null;
+
+            var result = new ResponseFoodDto
+            {
+                DishId = dish.DishId,
+                RestaurantId = dish.RestaurantId,
+                DishName = dish.DishName,
+                Description = dish.Description,
+                Price = dish.Price,
+                ImageUrl = fullImageUrl, // Return full URL
+                IsAvailable = dish.IsAvailable
+            };
+
+            return Ok(new { Message = "Dish created successfully.", Data = result });
+        }
+
+        /// <summary>
+        /// Updates an existing dish with optional image upload.
+        /// Restaurant Use Case R-UC07: Manage menu items.
+        /// If no image is provided, the existing image will be retained.
+        /// </summary>
+        [HttpPut("foods/{dishId}")]
+        [Consumes("multipart/form-data")]
+        [DisableRequestSizeLimit]
+        public async Task<ActionResult<object>> UpdateFood(int dishId, [FromForm] UpdateFoodDto model)
+        {
+            // === ENHANCED DEBUG ===
+            Console.WriteLine($"=== UPDATE FOOD REQUEST ===");
+            Console.WriteLine($"DishId from route: {dishId}");
+            Console.WriteLine($"Content-Type: {Request.ContentType}");
+            Console.WriteLine($"Has Form: {Request.HasFormContentType}");
+            
+            if (Request.HasFormContentType && Request.Form != null)
+            {
+                Console.WriteLine($"Form Keys Count: {Request.Form.Keys.Count}");
+                foreach (var key in Request.Form.Keys)
+                {
+                    Console.WriteLine($"  Form[{key}] = {Request.Form[key]}");
+                }
+                
+                Console.WriteLine($"Form Files Count: {Request.Form.Files.Count}");
+                foreach (var file in Request.Form.Files)
+                {
+                    Console.WriteLine($"  File: {file.Name}, FileName: {file.FileName}, Length: {file.Length}");
+                }
+            }
+            
+            Console.WriteLine($"\nModel State Valid: {ModelState.IsValid}");
+            Console.WriteLine($"Model is null: {model == null}");
+            
+            if (model != null)
+            {
+                Console.WriteLine($"Model.DishName: '{model.DishName}'");
+                Console.WriteLine($"Model.Price: {model.Price}");
+                Console.WriteLine($"Model.IsAvailable: {model.IsAvailable}");
+                Console.WriteLine($"Model.Description: '{model.Description}'");
+                Console.WriteLine($"Model.ImageUrl: {model.ImageUrl?.FileName ?? "null"}");
+            }
+            
+            if (!ModelState.IsValid)
+            {
+                Console.WriteLine("\n=== MODEL STATE ERRORS ===");
+                foreach (var error in ModelState)
+                {
+                    Console.WriteLine($"Key: {error.Key}");
+                    foreach (var err in error.Value.Errors)
+                    {
+                        Console.WriteLine($"  - {err.ErrorMessage}");
+                        if (err.Exception != null)
+                        {
+                            Console.WriteLine($"    Exception: {err.Exception.Message}");
+                        }
+                    }
+                }
+            }
+            Console.WriteLine("=== END DEBUG ===\n");
+            // === END DEBUG ===
+
+            if (model == null) return BadRequest("Invalid form data.");
+            if (string.IsNullOrWhiteSpace(model.DishName))
+                return BadRequest("Dish name is required.");
+            if (model.Price < 0) return BadRequest("Price must be greater than or equal to 0.");
+
+            var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!int.TryParse(userIdClaim, out var ownerId))
+                return Unauthorized("Invalid restaurant token.");
+
+            var restaurant = await _context.Restaurants.FirstOrDefaultAsync(r => r.OwnerId == ownerId);
+            if (restaurant == null) return NotFound("Restaurant not found.");
+
+            var dish = await _context.Dishes.FirstOrDefaultAsync(d => d.DishId == dishId && d.RestaurantId == restaurant.RestaurantId);
+            if (dish == null) return NotFound("Dish not found or does not belong to your restaurant.");
+
+            // Only process image update if a new file is provided
+            var imageFile = model.ImageUrl;
+            if (imageFile != null && imageFile.Length > 0)
+            {
+                var allowedExtensions = new[] { ".jpg", ".jpeg", ".png", ".gif", ".webp" };
+                var fileExtension = Path.GetExtension(imageFile.FileName).ToLowerInvariant();
+                if (!allowedExtensions.Contains(fileExtension))
+                    return BadRequest("Invalid file type. Allowed: jpg, jpeg, png, gif, webp");
+                if (imageFile.Length > 5 * 1024 * 1024)
+                    return BadRequest("File size must not exceed 5MB.");
+
+                // Delete old image if exists
+                if (!string.IsNullOrEmpty(dish.ImageUrl))
+                {
+                    var oldImagePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "dish", dish.ImageUrl);
+                    if (System.IO.File.Exists(oldImagePath))
+                    {
+                        try { System.IO.File.Delete(oldImagePath); }
+                        catch (Exception) { /* ignore deletion errors */ }
+                    }
+                }
+
+                // Save new image to wwwroot/dish
+                var fileName = $"{Guid.NewGuid()}{fileExtension}";
+                var dishDirectory = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "dish");
+                if (!Directory.Exists(dishDirectory)) Directory.CreateDirectory(dishDirectory);
+                var filePath = Path.Combine(dishDirectory, fileName);
+
+                await using (var stream = new FileStream(filePath, FileMode.Create))
+                {
+                    await imageFile.CopyToAsync(stream);
+                }
+
+                dish.ImageUrl = fileName;
+            }
+
+            // Update other fields
+            dish.DishName = model.DishName;
+            dish.Description = model.Description;
+            dish.Price = model.Price;
+            dish.IsAvailable = model.IsAvailable;
+
+            await _context.SaveChangesAsync();
+
+            // Build full URL for response
+            var fullImageUrl = !string.IsNullOrEmpty(dish.ImageUrl)
+                ? $"{Request.Scheme}://{Request.Host}/dish/{dish.ImageUrl}"
+                : null;
+
+            var result = new ResponseFoodDto
+            {
+                DishId = dish.DishId,
+                RestaurantId = dish.RestaurantId,
+                DishName = dish.DishName,
+                Description = dish.Description,
+                Price = dish.Price,
+                ImageUrl = fullImageUrl, // Return full URL
+                IsAvailable = dish.IsAvailable
+            };
+
+            return Ok(new { Message = "Dish updated successfully.", Data = result });
+        }
+
+        /// <summary>
+        /// Deletes a dish/food.
+        /// </summary>
+        /// <param name="dishId">The ID of the dish to delete.</param>
+        [HttpDelete("foods/{dishId}")]
+        public async Task<ActionResult<object>> DeleteFood(int dishId)
+        {
+            var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!int.TryParse(userIdClaim, out var ownerId))
+                return Unauthorized("Invalid restaurant token.");
+
+            var restaurant = await _context.Restaurants.FirstOrDefaultAsync(r => r.OwnerId == ownerId);
+            if (restaurant == null) return NotFound("Restaurant not found.");
+
+            var dish = await _context.Dishes.FirstOrDefaultAsync(d => d.DishId == dishId && d.RestaurantId == restaurant.RestaurantId);
+            if (dish == null) return NotFound("Dish not found or does not belong to your restaurant.");
+
+            var hasOrders = await _context.OrderItems.AnyAsync(oi => oi.DishId == dishId);
+            if (hasOrders) return BadRequest("Cannot delete dish that has been ordered. Consider marking it as unavailable instead.");
+
+            // Delete image from wwwroot/dish
+            if (!string.IsNullOrEmpty(dish.ImageUrl))
+            {
+                var oldImagePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "dish", dish.ImageUrl);
+                if (System.IO.File.Exists(oldImagePath))
+                {
+                    try { System.IO.File.Delete(oldImagePath); }
+                    catch (Exception) { /* ignore deletion errors */ }
+                }
+            }
+
+            _context.Dishes.Remove(dish);
+            await _context.SaveChangesAsync();
+
+            return Ok(new { Message = "Dish deleted successfully.", DishId = dishId });
+        }
+
+        /// <summary>
         /// Gets all dishes/foods for the authenticated restaurant.
         /// Restaurant Use Case R-UC06: View menu items.
         /// </summary>
@@ -68,7 +324,9 @@ namespace FOODGOBACKEND.Controllers
                 DishName = d.DishName,
                 Description = d.Description,
                 Price = d.Price,
-                ImageUrl = d.ImageUrl,
+                ImageUrl = !string.IsNullOrEmpty(d.ImageUrl)
+                    ? $"{Request.Scheme}://{Request.Host}/dish/{d.ImageUrl}"
+                    : null,
                 IsAvailable = d.IsAvailable
             }).ToList();
 
@@ -109,196 +367,13 @@ namespace FOODGOBACKEND.Controllers
                 DishName = dish.DishName,
                 Description = dish.Description,
                 Price = dish.Price,
-                ImageUrl = dish.ImageUrl,
+                ImageUrl = !string.IsNullOrEmpty(dish.ImageUrl)
+                    ? $"{Request.Scheme}://{Request.Host}/dish/{dish.ImageUrl}"
+                    : null,
                 IsAvailable = dish.IsAvailable
             };
 
             return Ok(result);
-        }
-
-        /// <summary>
-        /// Creates a new dish with image upload.
-        /// Restaurant Use Case R-UC07: Manage menu items.
-        /// Restaurant ID is automatically determined from authenticated token.
-        /// </summary>
-        [HttpPost("foods")]
-        [Consumes("multipart/form-data")]
-        public async Task<ActionResult<object>> CreateFood([FromForm] RequestFoodDto model)
-        {
-            if (model == null) return BadRequest("Invalid form data.");
-            if (string.IsNullOrWhiteSpace(model.DishName))
-                return BadRequest("Dish name is required.");
-            if (model.Price < 0) return BadRequest("Price must be greater than or equal to 0.");
-
-            var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
-            if (!int.TryParse(userIdClaim, out var ownerId))
-                return Unauthorized("Invalid restaurant token.");
-
-            var restaurant = await _context.Restaurants.FirstOrDefaultAsync(r => r.OwnerId == ownerId);
-            if (restaurant == null) return NotFound("Restaurant not found.");
-
-            string? imageUrl = null;
-            var imageFile = model.ImageUrl; // RequestFoodDto.ImageUrl is an IFormFile
-            if (imageFile != null && imageFile.Length > 0)
-            {
-                var allowedExtensions = new[] { ".jpg", ".jpeg", ".png", ".gif", ".webp" };
-                var fileExtension = Path.GetExtension(imageFile.FileName).ToLowerInvariant();
-                if (!allowedExtensions.Contains(fileExtension))
-                    return BadRequest("Invalid file type. Allowed: jpg, jpeg, png, gif, webp");
-                if (imageFile.Length > 5 * 1024 * 1024)
-                    return BadRequest("File size must not exceed 5MB.");
-
-                var fileName = $"{Guid.NewGuid()}{fileExtension}";
-                var imgDirectory = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "Img");
-                if (!Directory.Exists(imgDirectory)) Directory.CreateDirectory(imgDirectory);
-                var filePath = Path.Combine(imgDirectory, fileName);
-
-                await using (var stream = new FileStream(filePath, FileMode.Create))
-                {
-                    await imageFile.CopyToAsync(stream);
-                }
-
-                imageUrl = fileName;
-            }
-
-            var dish = new Dish
-            {
-                RestaurantId = restaurant.RestaurantId,
-                DishName = model.DishName,
-                Description = model.Description,
-                Price = model.Price,
-                ImageUrl = imageUrl,
-                IsAvailable = model.IsAvailable
-            };
-
-            _context.Dishes.Add(dish);
-            await _context.SaveChangesAsync();
-
-            var result = new ResponseFoodDto
-            {
-                DishId = dish.DishId,
-                RestaurantId = dish.RestaurantId,
-                DishName = dish.DishName,
-                Description = dish.Description,
-                Price = dish.Price,
-                ImageUrl = dish.ImageUrl,
-                IsAvailable = dish.IsAvailable
-            };
-
-            return Ok(new { Message = "Dish created successfully.", Data = result });
-        }
-
-        /// <summary>
-        /// Updates an existing dish with optional image upload.
-        /// Restaurant Use Case R-UC07: Manage menu items.
-        /// </summary>
-        [HttpPut("foods/{dishId}")]
-        [Consumes("multipart/form-data")]
-        public async Task<ActionResult<object>> UpdateFood(int dishId, [FromForm] RequestFoodDto model)
-        {
-            if (model == null) return BadRequest("Invalid form data.");
-            if (string.IsNullOrWhiteSpace(model.DishName))
-                return BadRequest("Dish name is required.");
-            if (model.Price < 0) return BadRequest("Price must be greater than or equal to 0.");
-
-            var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
-            if (!int.TryParse(userIdClaim, out var ownerId))
-                return Unauthorized("Invalid restaurant token.");
-
-            var restaurant = await _context.Restaurants.FirstOrDefaultAsync(r => r.OwnerId == ownerId);
-            if (restaurant == null) return NotFound("Restaurant not found.");
-
-            var dish = await _context.Dishes.FirstOrDefaultAsync(d => d.DishId == dishId && d.RestaurantId == restaurant.RestaurantId);
-            if (dish == null) return NotFound("Dish not found or does not belong to your restaurant.");
-
-            var imageFile = model.ImageUrl;
-            if (imageFile != null && imageFile.Length > 0)
-            {
-                var allowedExtensions = new[] { ".jpg", ".jpeg", ".png", ".gif", ".webp" };
-                var fileExtension = Path.GetExtension(imageFile.FileName).ToLowerInvariant();
-                if (!allowedExtensions.Contains(fileExtension))
-                    return BadRequest("Invalid file type. Allowed: jpg, jpeg, png, gif, webp");
-                if (imageFile.Length > 5 * 1024 * 1024)
-                    return BadRequest("File size must not exceed 5MB.");
-
-                if (!string.IsNullOrEmpty(dish.ImageUrl))
-                {
-                    var oldImagePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "Img", dish.ImageUrl);
-                    if (System.IO.File.Exists(oldImagePath))
-                    {
-                        try { System.IO.File.Delete(oldImagePath); }
-                        catch (Exception) { /* ignore deletion errors */ }
-                    }
-                }
-
-                var fileName = $"{Guid.NewGuid()}{fileExtension}";
-                var imgDirectory = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "Img");
-                if (!Directory.Exists(imgDirectory)) Directory.CreateDirectory(imgDirectory);
-                var filePath = Path.Combine(imgDirectory, fileName);
-
-                await using (var stream = new FileStream(filePath, FileMode.Create))
-                {
-                    await imageFile.CopyToAsync(stream);
-                }
-
-                dish.ImageUrl = fileName;
-            }
-
-            dish.DishName = model.DishName;
-            dish.Description = model.Description;
-            dish.Price = model.Price;
-            dish.IsAvailable = model.IsAvailable;
-
-            await _context.SaveChangesAsync();
-
-            var result = new ResponseFoodDto
-            {
-                DishId = dish.DishId,
-                RestaurantId = dish.RestaurantId,
-                DishName = dish.DishName,
-                Description = dish.Description,
-                Price = dish.Price,
-                ImageUrl = dish.ImageUrl,
-                IsAvailable = dish.IsAvailable
-            };
-
-            return Ok(new { Message = "Dish updated successfully.", Data = result });
-        }
-
-        /// <summary>
-        /// Deletes a dish/food.
-        /// </summary>
-        /// <param name="dishId">The ID of the dish to delete.</param>
-        [HttpDelete("foods/{dishId}")]
-        public async Task<ActionResult<object>> DeleteFood(int dishId)
-        {
-            var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
-            if (!int.TryParse(userIdClaim, out var ownerId))
-                return Unauthorized("Invalid restaurant token.");
-
-            var restaurant = await _context.Restaurants.FirstOrDefaultAsync(r => r.OwnerId == ownerId);
-            if (restaurant == null) return NotFound("Restaurant not found.");
-
-            var dish = await _context.Dishes.FirstOrDefaultAsync(d => d.DishId == dishId && d.RestaurantId == restaurant.RestaurantId);
-            if (dish == null) return NotFound("Dish not found or does not belong to your restaurant.");
-
-            var hasOrders = await _context.OrderItems.AnyAsync(oi => oi.DishId == dishId);
-            if (hasOrders) return BadRequest("Cannot delete dish that has been ordered. Consider marking it as unavailable instead.");
-
-            if (!string.IsNullOrEmpty(dish.ImageUrl))
-            {
-                var oldImagePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "Img", dish.ImageUrl);
-                if (System.IO.File.Exists(oldImagePath))
-                {
-                    try { System.IO.File.Delete(oldImagePath); }
-                    catch (Exception) { /* ignore deletion errors */ }
-                }
-            }
-
-            _context.Dishes.Remove(dish);
-            await _context.SaveChangesAsync();
-
-            return Ok(new { Message = "Dish deleted successfully.", DishId = dishId });
         }
 
         /// <summary>
@@ -433,8 +508,62 @@ namespace FOODGOBACKEND.Controllers
         }
 
         /// <summary>
+        /// Confirms a pending order.
+        /// Restaurant Use Case: Confirm order (PENDING → CONFIRMED).
+        /// </summary>
+        /// <param name="orderId">The ID of the order to confirm.</param>
+        [HttpPost("orders/{orderId}/confirm")]
+        public async Task<ActionResult<object>> ConfirmOrder(int orderId)
+        {
+            var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!int.TryParse(userIdClaim, out var ownerId))
+            {
+                return Unauthorized("Invalid restaurant token.");
+            }
+
+            // Get restaurant
+            var restaurant = await _context.Restaurants
+                .FirstOrDefaultAsync(r => r.OwnerId == ownerId);
+
+            if (restaurant == null)
+            {
+                return NotFound("Restaurant not found.");
+            }
+
+            // Get order
+            var order = await _context.Orders
+                .FirstOrDefaultAsync(o => o.OrderId == orderId && o.RestaurantId == restaurant.RestaurantId);
+
+            if (order == null)
+            {
+                return NotFound("Order not found or does not belong to your restaurant.");
+            }
+
+            // Check if order is in PENDING status
+            if (order.OrderStatus != "PENDING")
+            {
+                return BadRequest($"Order must be in PENDING status to confirm. Current status: {order.OrderStatus}");
+            }
+
+            // Update order status
+            order.OrderStatus = "CONFIRMED";
+            order.ConfirmedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                Message = "Order confirmed successfully.",
+                OrderId = order.OrderId,
+                OrderCode = order.OrderCode,
+                Status = order.OrderStatus,
+                ConfirmedAt = order.ConfirmedAt
+            });
+        }
+
+        /// <summary>
         /// Marks an order as preparing.
-        /// Restaurant Use Case R-UC02: Start preparing order.
+        /// Restaurant Use Case R-UC02: Start preparing order (CONFIRMED → PREPARING).
         /// </summary>
         /// <param name="orderId">The ID of the order to mark as preparing.</param>
         [HttpPost("orders/{orderId}/prepare")]

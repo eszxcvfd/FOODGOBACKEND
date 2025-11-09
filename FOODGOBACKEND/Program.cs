@@ -3,7 +3,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
-using Microsoft.Extensions.FileProviders; // <-- Add this using directive
+using Microsoft.Extensions.FileProviders;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -33,7 +33,6 @@ builder.Services.AddAuthentication(options =>
     };
 });
 
-
 builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
@@ -50,15 +49,20 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-// IMPORTANT: Add this BEFORE UseRouting
-app.UseStaticFiles(); // Enable serving static files from wwwroot
+// Enable serving static files from wwwroot (default)
+app.UseStaticFiles();
 
-// If you need to serve files from a specific directory
+// Serve dish images from wwwroot/dish at URL path /dish
+var dishPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "dish");
+if (!Directory.Exists(dishPath))
+{
+    Directory.CreateDirectory(dishPath);
+}
+
 app.UseStaticFiles(new StaticFileOptions
 {
-    FileProvider = new PhysicalFileProvider(
-        Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "Img")),
-    RequestPath = "/Img"
+    FileProvider = new PhysicalFileProvider(dishPath),
+    RequestPath = "/dish"
 });
 
 // Add Authentication middleware

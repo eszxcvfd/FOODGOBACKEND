@@ -4,10 +4,9 @@ using System.ComponentModel.DataAnnotations;
 namespace FOODGOBACKEND.Dtos.Restaurant
 {
     /// <summary>
-    /// Request DTO for creating or updating dish/food information.
-    /// Restaurant ID is automatically determined from authenticated user.
+    /// Request DTO for updating existing dish/food information.
     /// </summary>
-    public class RequestFoodDto
+    public class UpdateFoodDto
     {
         [Required(ErrorMessage = "Dish name is required.")]
         [StringLength(150, ErrorMessage = "Dish name cannot exceed 150 characters.")]
@@ -21,7 +20,8 @@ namespace FOODGOBACKEND.Dtos.Restaurant
         public decimal Price { get; set; }
 
         /// <summary>
-        /// Image file upload (jpg, jpeg, png, gif, webp - max 5MB)
+        /// Optional: Image file upload (jpg, jpeg, png, gif, webp - max 5MB).
+        /// If not provided, existing image will be retained.
         /// </summary>
         public IFormFile? ImageUrl { get; set; }
 
