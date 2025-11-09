@@ -26,8 +26,6 @@ namespace FOODGOBACKEND.Controllers
         /// Uses customer's default address for delivery.
         /// Default payment method: CASH.
         /// </summary>
-        /// <param name="dto">Order data to create.</param>
-        /// <returns>Created order with details.</returns>
         [HttpPost("orders")]
         public async Task<ActionResult<ResponseOrderDto>> CreateOrder([FromBody] RequestOrderDto dto)
         {
@@ -102,37 +100,38 @@ namespace FOODGOBACKEND.Controllers
                 });
             }
 
-            // Calculate shipping fee based on distance
-            decimal shippingFee = 0;
-            try
-            {
-                var distance = await GeoLocationHelper.CalculateDistanceBetweenAddressesSimple(
-                    restaurant.Address,
-                    defaultAddress.FullAddress
-                );
+            // ===== TEMPORARILY DISABLED: Distance-based shipping fee calculation =====
+            // TODO: Re-enable when geocoding performance is optimized
+            // try
+            // {
+            //     var distance = await GeoLocationHelper.CalculateDistanceBetweenAddressesSimple(
+            //         restaurant.Address,
+            //         defaultAddress.FullAddress
+            //     );
+    //
+            //     if (distance.HasValue)
+            //     {
+            //         shippingFee = 15000;
+            //         if (distance.Value > 3)
+            //         {
+            //             shippingFee += (decimal)Math.Ceiling(distance.Value - 3) * 5000;
+            //         }
+            //     }
+            //     else
+            //     {
+            //         shippingFee = 20000;
+            //     }
+            // }
+            // catch
+            // {
+            //     shippingFee = 20000;
+            // }
+            
+            // Fixed shipping fee (temporarily)
+            decimal shippingFee = 20000; // Default 20,000 VND
+            // ===== END TEMPORARY CHANGE =====
 
-                if (distance.HasValue)
-                {
-                    // Base fee 15,000 VND for first 3km, then 5,000 VND per additional km
-                    shippingFee = 15000;
-                    if (distance.Value > 3)
-                    {
-                        shippingFee += (decimal)Math.Ceiling(distance.Value - 3) * 5000;
-                    }
-                }
-                else
-                {
-                    // Default shipping fee if distance calculation fails
-                    shippingFee = 20000;
-                }
-            }
-            catch
-            {
-                // Default shipping fee if distance calculation fails
-                shippingFee = 20000;
-            }
-
-            // Calculate total amount (no voucher applied by default)
+            // Calculate total amount
             decimal totalAmount = subtotal + shippingFee;
 
             // Generate unique order code
@@ -409,8 +408,6 @@ namespace FOODGOBACKEND.Controllers
         /// Gets the list of active restaurants with distance calculation from customer's default address.
         /// Customer Use Case C-UC02: Browse restaurants.
         /// </summary>
-        /// <param name="pageNumber">Page number for pagination (default: 1).</param>
-        /// <param name="pageSize">Number of items per page (default: 10).</param>
         [HttpGet("restaurants")]
         [AllowAnonymous] // Allow unauthenticated users to browse restaurants
         public async Task<ActionResult<object>> GetRestaurants(
@@ -470,27 +467,31 @@ namespace FOODGOBACKEND.Controllers
 
             foreach (var r in restaurants)
             {
-                double distanceKm = 0;
-
-                // Calculate distance if customer has default address
-                if (!string.IsNullOrEmpty(customerDefaultAddress))
-                {
-                    var distance = await GeoLocationHelper.CalculateDistanceBetweenAddressesSimple(
-                        customerDefaultAddress,
-                        r.Address
-                    );
-
-                    if (distance.HasValue)
-                    {
-                        distanceKm = distance.Value;
-                    }
-                }
+                // ===== TEMPORARILY DISABLED: Distance calculation =====
+                // TODO: Re-enable when geocoding performance is optimized
+                // double distanceKm = 0;
+                // 
+                // if (!string.IsNullOrEmpty(customerDefaultAddress))
+                // {
+                //     var distance = await GeoLocationHelper.CalculateDistanceBetweenAddressesSimple(
+                //         customerDefaultAddress,
+                //         r.Address
+                //     );
+    //
+                //     if (distance.HasValue)
+                //     {
+                //         distanceKm = distance.Value;
+                //     }
+                // }
+                
+                double distanceKm = 0; // Temporarily set to 0
+                // ===== END TEMPORARY CHANGE =====
 
                 result.Add(new ItemRestaurantDto
                 {
                     RestaurantId = r.RestaurantId,
                     Name = r.RestaurantName,
-                    ImageUrl = null, // TODO: Add restaurant image support
+                    ImageUrl = null,
                     AverageRating = r.Reviews.Any() ? r.Reviews.Average() : 0,
                     ReviewCount = r.Reviews.Count,
                     CompletedOrderCount = r.CompletedOrders,
@@ -498,11 +499,8 @@ namespace FOODGOBACKEND.Controllers
                 });
             }
 
-            // Sort by distance if customer is authenticated and has default address
-            if (!string.IsNullOrEmpty(customerDefaultAddress))
-            {
-                result = result.OrderBy(r => r.DistanceInKm).ToList();
-            }
+            // Sort by RestaurantId instead of distance (since distance is 0)
+            result = result.OrderByDescending(r => r.RestaurantId).ToList();
 
             return Ok(new
             {

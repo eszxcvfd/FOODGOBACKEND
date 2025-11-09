@@ -131,10 +131,6 @@ namespace FOODGOBACKEND.Controllers
         /// Shipper can browse and choose which order to deliver.
         /// Shipper Use Case S-UC06: Browse available orders for free pick.
         /// </summary>
-        /// <param name="pageNumber">Page number for pagination (default: 1).</param>
-        /// <param name="pageSize">Number of items per page (default: 10).</param>
-        /// <param name="maxDistanceKm">Maximum distance in kilometers to filter orders (default: 10km).</param>
-        /// <returns>List of available orders sorted by distance.</returns>
         [HttpGet("orders/free-pick")]
         public async Task<ActionResult<object>> GetOrderFreePick(
             [FromQuery] int pageNumber = 1,
@@ -211,33 +207,36 @@ namespace FOODGOBACKEND.Controllers
                 });
             }
 
-            // Calculate distance for each order and filter by max distance
-            var ordersWithDistance = new List<(Order order, double distanceKm)>();
-
-            foreach (var order in pendingOrders)
-            {
-                try
-                {
-                    var distance = await GeoLocationHelper.CalculateDistanceBetweenAddressesSimple(
-                        $"{shipper.CurrentLat},{shipper.CurrentLng}",
-                        order.Restaurant.Address
-                    );
-
-                    if (distance.HasValue && distance.Value <= maxDistanceKm)
-                    {
-                        ordersWithDistance.Add((order, distance.Value));
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // Log error but continue with other orders
-                    Console.WriteLine($"Error calculating distance for order {order.OrderId}: {ex.Message}");
-                    continue;
-                }
-            }
-
-            // Sort by distance (nearest first)
-            ordersWithDistance = ordersWithDistance.OrderBy(x => x.distanceKm).ToList();
+            // ===== TEMPORARILY DISABLED: Distance calculation and filtering =====
+            // TODO: Re-enable when geocoding performance is optimized
+            // var ordersWithDistance = new List<(Order order, double distanceKm)>();
+    //
+    // foreach (var order in pendingOrders)
+    // {
+    //     try
+    //     {
+    //         var distance = await GeoLocationHelper.CalculateDistanceBetweenAddressesSimple(
+    //             $"{shipper.CurrentLat},{shipper.CurrentLng}",
+    //             order.Restaurant.Address
+    //         );
+    //
+    //         if (distance.HasValue && distance.Value <= maxDistanceKm)
+    //         {
+    //             ordersWithDistance.Add((order, distance.Value));
+    //         }
+    //     }
+    //     catch (Exception ex)
+    //     {
+    //         Console.WriteLine($"Error calculating distance for order {order.OrderId}: {ex.Message}");
+    //         continue;
+    //     }
+    // }
+    //
+    // ordersWithDistance = ordersWithDistance.OrderBy(x => x.distanceKm).ToList();
+            
+            // Temporarily show all orders without distance filtering
+            var ordersWithDistance = pendingOrders.Select(o => (order: o, distanceKm: 0.0)).ToList();
+            // ===== END TEMPORARY CHANGE =====
 
             var totalRecords = ordersWithDistance.Count;
             var totalPages = (int)Math.Ceiling(totalRecords / (double)pageSize);
@@ -270,8 +269,8 @@ namespace FOODGOBACKEND.Controllers
                     ? $"+ {remainingItemsCount} món khác" 
                     : null;
 
-                // Format distance
-                var distanceText = $"Cách bạn {distanceKm:F1} km";
+                // Format distance (temporarily set to 0)
+                var distanceText = "Đang cập nhật..."; // Or: $"Cách bạn {distanceKm:F1} km"
 
                 // Format destination
                 var destination = $"Giao tới: {order.DeliveryAddress}";
@@ -282,8 +281,6 @@ namespace FOODGOBACKEND.Controllers
                 // Format income
                 var income = $"Thu nhập: {shipperIncome:N0}đ";
 
-                // TODO: Add restaurant logo support in the future
-                // For now, we can use a placeholder or null
                 string? shopLogoUrl = null;
 
                 result.Add(new ItemFoodFreePickDto
@@ -302,7 +299,7 @@ namespace FOODGOBACKEND.Controllers
 
             return Ok(new
             {
-                Message = $"Found {totalRecords} available orders within {maxDistanceKm}km.",
+                Message = $"Found {totalRecords} available orders.",
                 PageNumber = pageNumber,
                 PageSize = pageSize,
                 TotalPages = totalPages,
@@ -433,53 +430,61 @@ namespace FOODGOBACKEND.Controllers
                 return; // No available shippers
             }
 
+            // ===== TEMPORARILY DISABLED: Distance-based assignment =====
+            // TODO: Re-enable when geocoding performance is optimized
             foreach (var order in pendingOrders)
             {
                 try
                 {
-                    // Calculate distance from restaurant to each available shipper
-                    var shipperDistances = new List<(Shipper shipper, double distance)>();
-
-                    foreach (var shipper in availableShippers)
-                    {
-                        var distance = await GeoLocationHelper.CalculateDistanceBetweenAddressesSimple(
-                            order.Restaurant.Address,
-                            $"{shipper.CurrentLat},{shipper.CurrentLng}" // Use shipper's current coordinates
-                        );
-
-                        if (distance.HasValue)
-                        {
-                            shipperDistances.Add((shipper, distance.Value));
-                        }
-                    }
-
-                    if (!shipperDistances.Any())
-                    {
-                        continue; // Skip this order if no distances could be calculated
-                    }
-
-                    // Get the 3 nearest shippers
-                    var nearestShippers = shipperDistances
-                        .OrderBy(sd => sd.distance)
-                        .Take(3)
-                        .Select(sd => sd.shipper)
-                        .ToList();
-
-                    if (!nearestShippers.Any())
+                    // // Calculate distance from restaurant to each available shipper
+                    // var shipperDistances = new List<(Shipper shipper, double distance)>();
+                    //
+                    // foreach (var shipper in availableShippers)
+                    // {
+                    //     var distance = await GeoLocationHelper.CalculateDistanceBetweenAddressesSimple(
+                    //         order.Restaurant.Address,
+                    //         $"{shipper.CurrentLat},{shipper.CurrentLng}"
+                    //     );
+                    //
+                    //     if (distance.HasValue)
+                    //     {
+                    //         shipperDistances.Add((shipper, distance.Value));
+                    //     }
+                    // }
+                    //
+                    // if (!shipperDistances.Any())
+                    // {
+                    //     continue; // Skip this order if no distances could be calculated
+                    // }
+                    //
+                    // // Get the 3 nearest shippers
+                    // var nearestShippers = shipperDistances
+                    //     .OrderBy(sd => sd.distance)
+                    //     .Take(3)
+                    //     .Select(sd => sd.shipper)
+                    //     .ToList();
+                    //
+                    // if (!nearestShippers.Any())
+                    // {
+                    //     continue;
+                    // }
+                    //
+                    // // Assign the order to the nearest available shipper
+                    // (In the future, you can implement a notification system to all 3 shippers)
+                    // var assignedShipper = nearestShippers.First();
+                    // order.ShipperId = assignedShipper.ShipperId;
+                    
+                    // Temporarily assign to first available shipper (no distance calculation)
+                    if (!availableShippers.Any())
                     {
                         continue;
                     }
-
-                    // Assign the order to the nearest available shipper
-                    // (In the future, you can implement a notification system to all 3 shippers)
-                    var assignedShipper = nearestShippers.First();
+                    
+                    var assignedShipper = availableShippers.First();
                     order.ShipperId = assignedShipper.ShipperId;
 
                     // Remove this shipper from available list for next orders
                     availableShippers.Remove(assignedShipper);
-
-                    // TODO: Send push notification to the assigned shipper
-                    // await NotificationService.SendOrderNotification(assignedShipper.ShipperId, order.OrderId);
                 }
                 catch (Exception ex)
                 {
@@ -488,6 +493,7 @@ namespace FOODGOBACKEND.Controllers
                     continue;
                 }
             }
+            // ===== END TEMPORARY CHANGE =====
 
             await _context.SaveChangesAsync();
         }

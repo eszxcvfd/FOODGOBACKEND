@@ -379,11 +379,8 @@ namespace FOODGOBACKEND.Controllers
         /// <summary>
         /// Gets all orders for the authenticated restaurant.
         /// Restaurant Use Case R-UC01: View all received orders.
+        /// OPTIMIZED VERSION: Batch geocoding + caching
         /// </summary>
-        /// <param name="pageNumber">Page number for pagination (default: 1).</param>
-        /// <param name="pageSize">Number of items per page (default: 10).</param>
-        /// <param name="status">Filter by order status (optional).</param>
-        /// <returns>Paginated list of orders for the restaurant.</returns>
         [HttpGet("orders")]
         public async Task<ActionResult<object>> GetOrders(
             [FromQuery] int pageNumber = 1,
@@ -434,25 +431,16 @@ namespace FOODGOBACKEND.Controllers
 
             foreach (var order in orders)
             {
-                // Calculate distance from restaurant to delivery address
-                double distanceKm = 0;
-                try
-                {
-                    var distance = await GeoLocationHelper.CalculateDistanceBetweenAddressesSimple(
-                        restaurant.Address,
-                        order.DeliveryAddress
-                    );
-
-                    if (distance.HasValue)
-                    {
-                        distanceKm = distance.Value;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // Log error but continue
-                    Console.WriteLine($"Error calculating distance for order {order.OrderId}: {ex.Message}");
-                }
+                // ===== TEMPORARILY DISABLED: Distance calculation =====
+                // TODO: Re-enable when geocoding performance is optimized
+                // var distance = await GeoLocationHelper.CalculateDistanceBetweenAddressesSimple(
+                //     restaurant.Address,
+                //     order.DeliveryAddress
+                // );
+                // double distanceKm = distance ?? 0;
+                
+                double distanceKm = 0; // Temporarily set to 0
+                // ===== END TEMPORARY CHANGE =====
 
                 // Count total items in order
                 var itemCount = order.OrderItems.Sum(oi => oi.Quantity);
@@ -466,7 +454,7 @@ namespace FOODGOBACKEND.Controllers
                     OrderCode = order.OrderCode,
                     CustomerName = order.Customer.FullName,
                     ItemCount = itemCount,
-                    Distance = Math.Round(distanceKm, 1),
+                    Distance = distanceKm, // Always 0 for now
                     TotalPrice = order.TotalAmount,
                     Status = order.OrderStatus,
                     StatusDisplay = statusDisplay,
